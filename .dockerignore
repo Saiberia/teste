@@ -1,0 +1,8 @@
+.git
+desktop
+tests
+dist
+build
+**/__pycache__
+*.db
+eval-out

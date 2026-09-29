@@ -76,6 +76,17 @@ class SimulatedLLM:
             data = recap.model_dump()
             data["summary"] = "Симуляция: " + data["summary"]
             return data
+        if "bullets" in props:  # live assist: behave like the offline assistant on the given transcript
+            from .assist import ASSIST_PROMPTS, Assistant
+
+            action = next((k for k, v in ASSIST_PROMPTS.items() if v in prompt), "summary")
+            segs = parse_transcript(_between(prompt, "<transcript>", "</transcript>"))
+            result = Assistant._offline(action, segs) if segs else {"text": "Пока ничего не прозвучало.", "bullets": []}
+            return {"text": "Симуляция: " + result["text"], "bullets": result["bullets"]}
+        if "suggestions" in props:  # meeting chat
+            question = prompt.rsplit("Вопрос:", 1)[-1].strip().splitlines()[0] if "Вопрос:" in prompt else ""
+            return {"answer": f"Симуляция ответа на вопрос «{question}» по материалам встречи.",
+                    "suggestions": ["Какие решения приняли?", "Кто за что отвечает?", "Что осталось открытым?"]}
         first_line = next((ln for ln in prompt.splitlines() if ln.strip()), "ответ")
         return _fill(schema, f"[симуляция] {first_line[:80]}")  # type: ignore[return-value]
 

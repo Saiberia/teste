@@ -1,0 +1,14 @@
+{
+  "name": "Recapper — ассистент встреч",
+  "short_name": "Recapper",
+  "description": "Слушает встречу и решает задачи, которые вы ставите голосом",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f6f6f3",
+  "theme_color": "#2f5bd3",
+  "lang": "ru",
+  "icons": [
+    {"src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}
+  ]
+}

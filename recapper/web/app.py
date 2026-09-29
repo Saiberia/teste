@@ -256,6 +256,16 @@ def create_app(
 
         threading.Thread(target=run, name=f"batch-{sess.report.id}", daemon=True).start()
 
+    @app.get("/api/live", dependencies=[Depends(auth)])
+    def live_list() -> list[dict]:
+        """Open sessions, newest first (the floating panel attaches to the first one)."""
+        _gc()
+        with live_lock:
+            sessions = [s for s in live.values() if s.state != "finished"]
+        sessions.sort(key=lambda s: s.report.created_at, reverse=True)
+        return [{"id": s.report.id, "title": s.report.title, "state": s.state, "created_at": s.report.created_at,
+                 "template": s.report.template} for s in sessions]
+
     @app.post("/api/live", dependencies=[Depends(auth)])
     def live_create(body: LiveCreate) -> dict:
         sess = _new_session(body.title, body.template, body.auto_answer)
