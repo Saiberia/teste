@@ -1,0 +1,4 @@
+{$RECAPPER_DOMAIN} {
+	encode gzip
+	reverse_proxy recapper:8000
+}

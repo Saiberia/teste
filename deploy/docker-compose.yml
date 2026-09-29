@@ -1,0 +1,27 @@
+services:
+  recapper:
+    build: ..
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      RECAPPER_ASR: faster-whisper
+      RECAPPER_WHISPER_MODEL: small
+    volumes:
+      - recapper-data:/data
+    expose:
+      - "8000"
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - recapper
+volumes:
+  recapper-data:
+  caddy-data:

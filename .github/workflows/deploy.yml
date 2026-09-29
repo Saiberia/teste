@@ -1,0 +1,27 @@
+name: Deploy to VPS
+
+# Needs repository secrets: VPS_HOST (e.g. 144.31.84.167), VPS_USER (e.g. root), VPS_SSH_KEY (private key).
+# Without them the job is skipped.
+on:
+  push:
+    branches: ["claude/cloud-mode-claude-code-g6q3pn"]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check secrets
+        id: check
+        env:
+          KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: echo "ok=$([ -n "$KEY" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - name: Deploy
+        if: steps.check.outputs.ok == 'true'
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 30m
+          script: curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/deploy/install.sh | sudo bash
