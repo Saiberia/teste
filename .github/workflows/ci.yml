@@ -26,6 +26,7 @@ jobs:
   desktop:
     name: Desktop tests (Linux, Electron under Xvfb)
     runs-on: ubuntu-latest
+    if: ${{ hashFiles('desktop/package-lock.json') != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
