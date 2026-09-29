@@ -236,9 +236,12 @@
     const who = item.origin === "voice" ? t("by_voice") : item.origin === "user" ? t("typed") : item.detector === "heuristic" ? t("possible") : "";
     return [kind + (who ? " · " + who : ""), item.speaker, fmtClock(item.start)].filter(Boolean).join(" · ");
   }
+  const SEEN = new Set();
   function itemCard(item, ans, opts = {}) {
     const pending = !ans && (item.origin !== "meeting" || S.pending.has(item.id));
-    const card = el("article", { class: "item" + (opts.compact ? " compact" : "") + (ans ? " st-" + ans.status : pending ? " pending" : "") });
+    const fresh = !SEEN.has(item.id + ":" + (ans ? ans.status : "wait"));  // анимируем только новое
+    SEEN.add(item.id + ":" + (ans ? ans.status : "wait"));
+    const card = el("article", { class: "item" + (fresh ? " fresh" : "") + (opts.compact ? " compact" : "") + (ans ? " st-" + ans.status : pending ? " pending" : "") });
     card.append(el("div", { class: "item-head" },
       el("h3", {}, item.text), el("span", { class: "meta" }, itemLabel(item))));
     if (item.quote && item.quote !== item.text && !opts.compact) card.append(el("blockquote", {}, item.quote));
@@ -340,11 +343,24 @@
     catch (e) { toast(e.message, "err"); }
   }
   function showAssist(data) {
-    const out = $("#assist-out") || $("#p-assist-out"); if (!out) return;
-    out.className = "assist-result";
-    out.replaceChildren(el("h3", {}, data.title || ""), data.text ? el("p", {}, data.text) : null,
-      data.bullets && data.bullets.length ? el("ul", {}, data.bullets.map((b) => el("li", {}, b))) : null);
+    const parts = [el("h3", {}, data.title || ""), data.text ? el("p", {}, data.text) : null,
+      data.bullets && data.bullets.length ? el("ul", {}, data.bullets.map((b) => el("li", {}, b))) : null].filter(Boolean);
+    const inPanel = $("#p-assist-out");
+    if (inPanel) { inPanel.className = "assist-result"; inPanel.replaceChildren(...parts); return; }
+    const hint = $("#assist-out"); if (hint) hint.textContent = "";
+    // Результат выезжает справа выдвижной панелью, не сдвигая ленту задач.
+    let drawer = $("#drawer");
+    if (!drawer) {
+      drawer = el("aside", { id: "drawer", class: "drawer", role: "dialog", "aria-label": data.title || "" });
+      document.body.append(drawer);
+      document.addEventListener("keydown", (e) => { if (e.key === "Escape") drawer.classList.remove("open"); });
+      document.addEventListener("pointerdown", (e) => { if (!drawer.contains(e.target)) drawer.classList.remove("open"); });
+    }
+    const close = el("button", { class: "btn small ghost drawer-close", "aria-label": "×", onclick: () => drawer.classList.remove("open") }, "✕");
+    drawer.replaceChildren(close, el("div", { class: "assist-result" }, ...parts));
+    requestAnimationFrame(() => drawer.classList.add("open"));
   }
+
 
   // ---- floating panel (desktop) ------------------------------------------------------------
   function renderPanel() {

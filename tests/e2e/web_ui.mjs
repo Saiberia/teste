@@ -47,8 +47,11 @@ try {
   await snap(panel, "02-panel");
 
   await page.click("text=Итог на текущий момент");
-  await page.waitForSelector(".assist-result", { timeout: 10000 });
+  await page.waitForSelector("#drawer.open .assist-result", { timeout: 10000 });
   if ((await page.textContent(".assist-result")).includes("<transcript>")) fail("assist result leaked prompt markup");
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("#drawer:not(.open)", { state: "attached" });
+  await page.waitForTimeout(350);  // the drawer slides out
   await page.click('#heard .item button:has-text("Ответить")');
   await page.waitForSelector("#heard .item .chip.st-draft", { timeout: 10000 });
   await page.fill(".ask input", "Какие риски у промокодов?"); await page.press(".ask input", "Enter");
@@ -92,7 +95,7 @@ try {
   await anon.goto(`${base}/`); await anon.waitForSelector("main");
   if (!(await anon.textContent("body")).includes("токен")) fail("without a token the UI must explain how to open it");
 
-  const relevant = errors.filter((e) => !e.includes("401"));
+  const relevant = errors.filter((e) => !e.includes("401") && !e.includes("ERR_CERT_AUTHORITY_INVALID"));  // fonts via a sandbox proxy
   if (relevant.length) fail("browser errors: " + relevant.join(" | "));
   console.log("web UI e2e: OK");
 } finally {
