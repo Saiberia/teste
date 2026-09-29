@@ -257,11 +257,10 @@ def create_app(
     def _finish_in_background(sess: LiveSession) -> None:
         def run() -> None:
             try:
-                report = sess.finish()
-                store.save(report, owner=OWNER)
+                sess.finish(before_done=lambda report: store.save(report, owner=OWNER))  # saved before "done"
             except Exception:  # never lose the session silently
                 log.exception("finish failed")
-                sess._emit("error", {"message": "не удалось сохранить отчёт", "retry": False})
+                sess._emit("error", {"message": "не удалось завершить встречу", "retry": False})
             finally:
                 with live_lock:
                     done_at[sess.report.id] = time.monotonic()
@@ -288,9 +287,8 @@ def create_app(
     def live_list() -> list[dict]:
         """Open sessions, newest first (the floating panel attaches to the first one)."""
         _gc()
-        with live_lock:
-            sessions = [s for s in live.values() if s.state != "finished"]
-        sessions.sort(key=lambda s: s.report.created_at, reverse=True)
+        with live_lock:  # dict order = creation order; newest first
+            sessions = [s for s in reversed(list(live.values())) if s.state != "finished"]
         return [{"id": s.report.id, "title": s.report.title, "state": s.state, "created_at": s.report.created_at,
                  "template": s.report.template} for s in sessions]
 
@@ -398,17 +396,21 @@ def create_app(
 
     # --- batch input (runs as a session in the background) -----------------------
     @app.post("/api/meetings", dependencies=[Depends(auth)])
-    async def create_meeting(
-        title: str = Form("Встреча", max_length=200),
-        transcript: str = Form(""),
-        questions: str = Form(""),
-        template: str = Form(""),
-        auto_answer: str = Form(""),
-        file: UploadFile | None = File(None),
-    ) -> dict:
-        text = transcript
-        if file is not None and file.filename:
-            raw = await file.read(MAX_TRANSCRIPT_BYTES + 1)
+    async def create_meeting(request: Request) -> dict:
+        """Form fields: title, transcript (text) or file, questions, template, auto_answer."""
+        try:  # parsed by hand: Starlette's default 1 MB per-field limit is below our transcript limit
+            # x3: urlencoded Cyrillic grows threefold; the decoded size is checked below.
+            form = await request.form(max_part_size=MAX_TRANSCRIPT_BYTES * 3 + 1024)
+        except Exception as exc:
+            raise HTTPException(413, f"форма слишком большая: {exc}") from exc
+        field = lambda name: form.get(name) if isinstance(form.get(name), str) else ""  # noqa: E731
+        title = field("title") or "Встреча"
+        if len(title) > 200:
+            raise HTTPException(422, "title: не длиннее 200 символов")
+        text = field("transcript")
+        upload = form.get("file")
+        if upload is not None and not isinstance(upload, str) and upload.filename:
+            raw = await upload.read(MAX_TRANSCRIPT_BYTES + 1)
             if len(raw) > MAX_TRANSCRIPT_BYTES:
                 raise HTTPException(413, "файл расшифровки слишком большой")
             text = raw.decode("utf-8", errors="replace")
@@ -417,8 +419,9 @@ def create_app(
         segments = parse_transcript(text)
         if not segments:
             raise HTTPException(422, "пустая или нераспознанная расшифровка")
-        sess = _new_session(title, template or None, auto_answer if auto_answer in ("commands", "all") else None)
-        _run_batch(sess, segments, _questions(questions))
+        auto_answer = field("auto_answer")
+        sess = _new_session(title, field("template") or None, auto_answer if auto_answer in ("commands", "all") else None)
+        _run_batch(sess, segments, _questions(field("questions")))
         return {"id": sess.report.id, "state": "processing"}
 
     @app.post("/api/meetings/audio", dependencies=[Depends(auth)])
@@ -588,8 +591,9 @@ def create_app(
 
     @app.post("/api/knowledge", dependencies=[Depends(auth)])
     async def upload_knowledge(file: UploadFile = File(...)) -> dict:
-        name = Path(file.filename or "").name
-        if not re.fullmatch(r"[\w\-. ]{1,120}", name) or Path(name).suffix.lower() not in TEXT_SUFFIXES:
+        name = file.filename or ""
+        if (Path(name).name != name or not re.fullmatch(r"[\w\-. ]{1,120}", name) or name.startswith(".")
+                or Path(name).suffix.lower() not in TEXT_SUFFIXES):
             raise HTTPException(422, "допустимы файлы .md, .txt, .csv с простым именем")
         data = await file.read(MAX_KB_FILE_BYTES + 1)
         if len(data) > MAX_KB_FILE_BYTES:

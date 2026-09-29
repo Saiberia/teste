@@ -206,7 +206,9 @@ def test_answer_limit():
     for q in ("Первый вопрос про бюджет?", "Второй вопрос про конверсию?", "Третий вопрос про удержание?"):
         s.ask(q)
     report = s.finish(deadline=5)
-    assert len(report.answers) == 2
+    assert len(report.answers) == 3
+    over = [a for a in report.answers if a.summary == "Достигнут лимит ответов"]
+    assert len(over) == 1 and over[0].status == AnswerStatus.FAILED
     assert any(e.type == "limit" for e in s.events())
 
 

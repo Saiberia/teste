@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -137,8 +138,10 @@ def _coerce(f: Field, value: Any) -> Any:
             raise SettingsError(f"{f.key}: ожидается true/false")
         return value
     if f.type in ("int", "float"):
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
             raise SettingsError(f"{f.key}: ожидается число")
+        if f.type == "int" and float(value) != int(value):
+            raise SettingsError(f"{f.key}: ожидается целое число")
         value = int(value) if f.type == "int" else float(value)
         if (f.min is not None and value < f.min) or (f.max is not None and value > f.max):
             raise SettingsError(f"{f.key}: допустимо от {f.min} до {f.max}")

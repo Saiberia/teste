@@ -88,6 +88,8 @@ CHAT_SYSTEM = """Ты отвечаешь на вопросы пользоват�
 - answer: ответ в markdown;
 - suggestions: ровно 3 коротких следующих вопроса, которые логично задать дальше."""
 
+DEFAULT_SUGGESTIONS = ["Какие решения приняли?", "Кто за что отвечает?", "Какие вопросы остались открытыми?"]
+
 CHAT_SCHEMA = {
     "type": "object",
     "properties": {"answer": {"type": "string"}, "suggestions": {"type": "array", "items": {"type": "string"}}},
@@ -166,7 +168,13 @@ class Assistant:
             try:
                 data = self.llm.json(CHAT_SYSTEM, prompt, CHAT_SCHEMA, "medium")
                 if not validate_schema(data, CHAT_SCHEMA):
-                    return {"answer": data["answer"], "suggestions": data["suggestions"][:3], "source": "ai"}
+                    suggestions = [x.strip() for x in data["suggestions"] if x.strip()]
+                    for default in DEFAULT_SUGGESTIONS:  # the UI promises exactly three
+                        if len(suggestions) >= 3:
+                            break
+                        if default not in suggestions:
+                            suggestions.append(default)
+                    return {"answer": data["answer"], "suggestions": suggestions[:3], "source": "ai"}
             except LLMError as exc:
                 log.warning("chat failed: %s", exc)
         return {**self._offline_chat(question, report, past), "source": "offline"}
@@ -184,5 +192,5 @@ class Assistant:
         if past:
             parts.append("\nИз прошлых встреч:\n" + past[:1500])
         suggestions = [i.text for i in report.items if i.kind == ItemKind.QUESTION][:3]
-        suggestions += ["Какие решения приняли?", "Кто за что отвечает?", "Какие вопросы остались открытыми?"]
+        suggestions += [d for d in DEFAULT_SUGGESTIONS if d not in suggestions]
         return {"answer": "\n".join(parts), "suggestions": suggestions[:3]}

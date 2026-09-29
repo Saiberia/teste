@@ -9,6 +9,7 @@ handlers only translate Telegram updates. Every blocking call runs in a thread.
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import re
 import tempfile
@@ -96,6 +97,8 @@ class BotService:
         commands = self.runtime.components(title, owner_of(user_id)).commands.detect(segments, [], [])
         if not commands:
             text = " ".join(s.text for s in segments)
+            if is_chatter(text):  # "Спасибо." must not trigger a paid answer
+                return [t("bot_short", self.lang)]
             return await self.ask(user_id, text)
         return await asyncio.to_thread(self._process, user_id, segments, title)
 
@@ -164,7 +167,8 @@ async def _reply(update, messages: list[str]) -> None:
             await update.effective_message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
         except Exception as exc:  # e.g. Telegram rejected the markup: send plain text instead
             log.warning("HTML reply failed (%s), sending plain text", exc)
-            await update.effective_message.reply_text(re.sub(r"<[^>]+>", "", msg), disable_web_page_preview=True)
+            plain = html.unescape(re.sub(r"<[^>]+>", "", msg))
+            await update.effective_message.reply_text(plain, disable_web_page_preview=True)
 
 
 def make_handlers(service: BotService):

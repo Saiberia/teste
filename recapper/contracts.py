@@ -17,7 +17,7 @@ _FENCE_RE = re.compile(r"```(?:json|JSON)?\s*(.*?)```", re.DOTALL)
 
 def extract_json(text: str) -> Any:
     """Parse JSON even when a model wraps it in prose or ``` fences."""
-    text = (text or "").strip().lstrip("﻿")
+    text = (text or "").strip().lstrip("\ufeff")
     try:
         return json.loads(text)
     except json.JSONDecodeError:

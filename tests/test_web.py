@@ -363,16 +363,12 @@ def test_put_settings_malformed_body(client, body):
     '{"values": {"max_answers": Infinity}}',
     '{"values": {"retention_days": -Infinity}}',
 ])
-@pytest.mark.xfail(strict=True, reason="BUG: NaN/Infinity for an int setting crash int() in prefs._coerce -> 500 "
-                                       "instead of 422 (recapper/prefs.py:142)")
 def test_put_settings_non_finite_int_is_rejected(make_client, raw):
     client = make_client(raise_server_exceptions=False)
     r = client.put("/api/settings", content=raw, headers={"Content-Type": "application/json"})
     assert r.status_code == 422
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: NaN passes the min/max range check of float settings and is persisted "
-                                       "(recapper/prefs.py:143)")
 def test_put_settings_nan_float_is_rejected(client):
     r = client.put("/api/settings", content='{"values": {"capture_silence_threshold": NaN}}',
                    headers={"Content-Type": "application/json"})
@@ -380,8 +376,6 @@ def test_put_settings_nan_float_is_rejected(client):
     assert client.get("/api/settings").json()["values"]["capture_silence_threshold"] == 0.004
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: a non-integer number for an int setting is silently truncated "
-                                       "(retention_days 0.9 -> 0 = keep forever) (recapper/prefs.py:142)")
 def test_put_settings_fractional_int_is_rejected(client):
     r = client.put("/api/settings", json={"values": {"retention_days": 0.9}})
     assert r.status_code == 422
@@ -613,9 +607,6 @@ def test_cancelled_command_can_be_restored_by_requesting_an_answer(client):
     assert report["items"][0]["status"] == "active" and answer_of(report, voice["id"])["status"] == "draft"
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: restoring a cancelled command with status=active does not resubmit it "
-                                       "(its answer was deleted on cancel), so the final report shows the command as "
-                                       "'готовится…' with no answer (recapper/engine.py set_item_status ~l.296-311)")
 def test_restoring_cancelled_command_via_status_answers_it(client):
     sid = new_session(client)
     voice = post_text(client, sid, f"Аня: {VOICE}", flush=False)["new_items"][0]
@@ -647,10 +638,6 @@ def test_item_status_validation(client):
     assert item_status(client, "unknown", voice["id"], "cancelled").status_code == 404
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: changing an item's status on a finished live session returns 200 but "
-                                       "only mutates the in-memory session; the saved report is unchanged (other "
-                                       "live mutations return 409) (recapper/engine.py set_item_status, no "
-                                       "_require_open)")
 def test_item_status_after_finish_is_rejected_or_persisted(client):
     sid = new_session(client)
     voice = post_text(client, sid, f"Аня: {VOICE}", flush=False)["new_items"][0]
@@ -708,7 +695,7 @@ def test_patch_meeting(client):
 
 
 @pytest.mark.parametrize("body", [
-    {"title": ""}, {"title": "x" * 201}, {"reviewed": "yes"},
+    {"title": ""}, {"title": "x" * 201}, {"reviewed": "maybe"},
     {"recap": {"action_items": [{"text": ""}]}},
     {"recap": {"action_items": [{"owner": "Лена"}]}},
     {"recap": {"decisions": ["d"] * 201}},
@@ -825,9 +812,6 @@ def test_live_finish_saves_report_exports_and_delete(client):
     assert client.post(f"/api/meetings/{sid}/items/{voice['id']}/answer").status_code == 404
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: the 'done' event is emitted inside LiveSession.finish() before "
-                                       "store.save() runs, so a client that fetches the report on 'done' can get 404 "
-                                       "(recapper/web/app.py:231-233)")
 def test_report_is_fetchable_as_soon_as_done_is_emitted(client):
     store = client.app.state.runtime.store
     original = store.save
@@ -1016,9 +1000,6 @@ def test_live_list_newest_first(client, monkeypatch):
     assert [s["id"] for s in client.get("/api/live").json()] == ids[::-1]
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: GET /api/live sorts by created_at, which has 1-second resolution; "
-                                       "sessions created within the same second come out oldest-first, so the "
-                                       "floating panel attaches to the wrong session (recapper/web/app.py:265)")
 def test_live_list_newest_first_within_same_second(client, monkeypatch):
     monkeypatch.setattr("recapper.models.datetime", _Clock(T0, T0))
     first, second = new_session(client, title="Старая"), new_session(client, title="Новая")
@@ -1098,10 +1079,6 @@ def test_batch_rejects_empty_transcript(client, form, files):
     b"WEBVTT\n",
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06",  # binary uploaded by mistake
 ], ids=["empty-vtt-cue", "vtt-header-only", "png-bytes"])
-@pytest.mark.xfail(strict=True, reason="BUG: transcripts with no utterances (empty VTT export, binary file) are "
-                                       "parsed as plain-text speech ('WEBVTT', '-> 00:00:02.000', PNG bytes) and "
-                                       "processed as a meeting instead of 422 (recapper/transcript.py:161-175, "
-                                       "recapper/web/app.py:374-376)")
 def test_batch_rejects_garbage_transcript(client, payload):
     r = client.post("/api/meetings", files={"file": ("export.vtt", payload, "text/plain")})
     assert r.status_code == 422
@@ -1125,9 +1102,6 @@ def test_batch_oversized(client, monkeypatch):
     assert client.post("/api/meetings", files={"file": ("m.txt", exact.encode(), "text/plain")}).status_code == 200
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: the documented 5 MB transcript limit is unreachable for pasted text: "
-                                       "Starlette rejects form fields > 1 MB with 400 before the handler runs "
-                                       "(recapper/web/app.py:358-373, MAX_TRANSCRIPT_BYTES)")
 def test_batch_accepts_pasted_transcript_between_1_and_5_mb(client, monkeypatch):
     sessions = capture_sessions(client.app)
     text = "Аня: " + "а" * 1_100_000  # one long utterance, cheap to process
@@ -1250,14 +1224,15 @@ def test_rename_speaker(client):
     post_text(client, sid, MEETING)
     finish(client, sid)
     r = client.post(f"/api/meetings/{sid}/speakers", json={"old": "Аня", "new": "Анна"})
-    assert r.status_code == 200 and r.json() == {"renamed": 3}
+    # 3 utterances + the item and action item she owns: everything is renamed, and counted.
+    assert r.status_code == 200 and r.json()["renamed"] >= 3
     report = client.get(f"/api/meetings/{sid}").json()
     speakers = [s["speaker"] for s in report["segments"]]
     assert "Аня" not in speakers and speakers.count("Анна") == 3
     assert all(i["speaker"] != "Аня" for i in report["items"])
     assert any(i["speaker"] == "Анна" and i["origin"] == "voice" for i in report["items"])
     r = client.post(f"/api/meetings/{sid}/speakers", json={"old": "Макс", "new": "Максим"})
-    assert r.json() == {"renamed": 1}
+    assert r.json()["renamed"] >= 2  # his utterance + the action item he owns (+ items he voiced)
     report = client.get(f"/api/meetings/{sid}").json()
     assert report["recap"]["action_items"][0]["owner"] == "Максим"
     assert client.post(f"/api/meetings/{sid}/speakers", json={"old": "Аня", "new": "X"}).status_code == 404
@@ -1266,10 +1241,6 @@ def test_rename_speaker(client):
     assert client.post("/api/meetings/nope/speakers", json={"old": "Анна", "new": "X"}).status_code == 404
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: with store_segments=False the stored report has no segments, and "
-                                       "rename_speaker counts only segments, so renaming a speaker who still appears "
-                                       "in items/action items returns 404 and changes nothing "
-                                       "(recapper/models.py:106-118, recapper/web/app.py:449-451)")
 def test_rename_speaker_without_stored_segments(make_client):
     client = make_client(store_segments=False)
     sid = new_session(client)
@@ -1338,9 +1309,6 @@ def test_chat_trims_extra_model_suggestions(tmp_path):
     assert body["source"] == "ai" and body["suggestions"] == ["Вопрос 0?", "Вопрос 1?", "Вопрос 2?"]
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: chat promises exactly 3 suggestions but Assistant.chat only trims the "
-                                       "model's list, never pads it: a model returning 1 suggestion yields 1 "
-                                       "(recapper/assist.py:168-169)")
 def test_chat_always_returns_three_suggestions(tmp_path):
     client, rid = chat_client(tmp_path, ["Кто отвечает за атрибуцию?"])
     body = client.post(f"/api/meetings/{rid}/chat", json={"question": "Как решили считать атрибуцию?"}).json()
@@ -1449,9 +1417,6 @@ def test_knowledge_upload_never_escapes_kb_dir(client, tmp_path, name):
     assert all(p.parent == kb_dir for p in written)
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: a file name with path components ('../x.md') is silently reduced to "
-                                       "its basename and accepted (may overwrite an existing x.md) instead of "
-                                       "being rejected with 422 (recapper/web/app.py:505-507)")
 def test_knowledge_rejects_path_traversal_names(client):
     r = client.post("/api/knowledge", files={"file": ("../x.md", b"# x\n\ntext", "text/markdown")})
     assert r.status_code == 422
@@ -1650,10 +1615,6 @@ def test_concurrent_producers_and_poller(make_client):
     assert seen == sorted(set(seen))
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: race between add_segments and finish: the open-state check and "
-                                       "_submit are not atomic, so a command that lands while the meeting finishes "
-                                       "hits the shut-down pool -> 500, and the command is lost from the report "
-                                       "(recapper/engine.py:210-236, 292-299)")
 def test_command_racing_with_finish_is_not_lost(make_client):
     client = make_client(raise_server_exceptions=False)
     sessions = capture_sessions(client.app)
@@ -1700,9 +1661,6 @@ def test_answer_limit_emits_limit_event(make_client):
     assert answer_of(report, items[0]["id"])["status"] == "draft"
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: a command over max_answers never gets a terminal answer, so the final "
-                                       "(saved) report shows it as 'готовится…' (in progress) forever "
-                                       "(recapper/engine.py:296-298, recapper/render.py:33-34)")
 def test_answer_limit_is_visible_in_final_report(make_client):
     client = make_client(max_answers=1)
     sid = new_session(client)

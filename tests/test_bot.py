@@ -558,9 +558,6 @@ def test_voice_recognition_problems(service, handlers, payload, expected):
     assert ai_calls(service) == 0 and stored(service) == []
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: a voice note without a wake word is sent to the paid answerer "
-                                       "without the is_chatter() check the text path has; 'Спасибо.' triggers "
-                                       "research and is stored as a question (recapper/bot/telegram_bot.py:97-99)")
 def test_voice_chatter_does_not_trigger_ai(service, handlers):
     update = make_update(voice=make_voice("Спасибо.".encode()))
     run(handlers["audio"](update, ctx()))
@@ -641,9 +638,6 @@ def test_reply_falls_back_to_plain_text_when_html_is_rejected():
     assert second.args == ("<b>второе</b>",) and second.kwargs["parse_mode"] == "HTML"
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: the plain-text fallback strips tags but leaves HTML entities, so the "
-                                       "user sees '&amp;'/'&lt;' literally; it should html.unescape() "
-                                       "(recapper/bot/telegram_bot.py:167)")
 def test_reply_plain_fallback_unescapes_entities():
     update = make_update()
     send = AsyncMock(side_effect=[Exception("Bad Request: can't parse entities"), None])

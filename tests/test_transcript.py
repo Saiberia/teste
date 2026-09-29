@@ -48,7 +48,7 @@ def test_srt():
 def test_empty_and_bom():
     assert parse_transcript("") == []
     assert parse_transcript("   \n\n") == []
-    assert parse_transcript("﻿Аня: текст")[0].speaker == "Аня"
+    assert parse_transcript("\ufeffАня: текст")[0].speaker == "Аня"
 
 
 def test_roundtrip_text(meeting_text):

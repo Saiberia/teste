@@ -116,8 +116,8 @@ class MeetingReport(BaseModel):
                 seg.speaker, count = new, count + 1
         for item in self.items:
             if item.speaker == old:
-                item.speaker = new
+                item.speaker, count = new, count + 1
         for action in self.recap.action_items:
             if action.owner == old:
-                action.owner = new
+                action.owner, count = new, count + 1
         return count

@@ -158,15 +158,19 @@ def _parse_plain(text: str) -> list[Segment]:
     return segments
 
 
+def _looks_binary(text: str) -> bool:
+    sample = text[:4096]
+    bad = sum(1 for ch in sample if ch == "\ufffd" or (ord(ch) < 32 and ch not in "\n\t"))
+    return "\x00" in sample or bad > max(3, len(sample) // 50)
+
+
 def parse_transcript(text: str) -> list[Segment]:
     """Parse any supported transcript format; never raises on odd input."""
-    text = (text or "").lstrip("﻿").replace("\r\n", "\n")
-    if not text.strip():
+    text = (text or "").lstrip("\ufeff").replace("\r\n", "\n")
+    if not text.strip() or _looks_binary(text):
         return []
-    if _CUE_RE.search(text) is not None:
-        cues = _parse_cues(text)
-        if cues:
-            return cues
+    if _CUE_RE.search(text) is not None or text.lstrip().startswith("WEBVTT"):
+        return _parse_cues(text)  # a subtitle file with no speech is empty, not "WEBVTT" as speech
     lines = text.splitlines()
     if sum(1 for ln in lines if _CLOCK_LINE_RE.match(ln)) >= 1:
         blocks = _parse_blocks(lines)

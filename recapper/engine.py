@@ -7,7 +7,7 @@ import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from .answer import Answerer, LLMAnswerer, MemorySearch, OfflineAnswerer
 from .assist import Assistant
@@ -226,13 +226,17 @@ class LiveSession:
         return added
 
     def _add_items(self, items: list[Item]) -> list[Item]:
+        # Adding and scheduling happen under one lock, so finish() can never seal the
+        # report between "item accepted" and "answer scheduled".
         with self._lock:
+            if self.state in ("sealing", "finished"):
+                raise SessionClosed("встреча уже завершена")
             fresh = [i for i in items if not (not i.is_command and is_duplicate(i.text, self.report.items))]
             self.report.items.extend(fresh)
-        for item in fresh:
-            self._emit("item", item.model_dump(mode="json"))
-            if item.is_command or self.auto_answer == "all":
-                self._submit(item)
+            for item in fresh:
+                self._emit("item", item.model_dump(mode="json"))
+                if item.is_command or self.auto_answer == "all":
+                    self._submit(item)
         return fresh
 
     def _detect(self, final: bool = False) -> list[Item]:
@@ -274,50 +278,47 @@ class LiveSession:
             self._require_open()
             self._touch()
             self.report.items.append(item)
-        self._emit("item", item.model_dump(mode="json"))
-        self._submit(item)
+            self._emit("item", item.model_dump(mode="json"))
+            self._submit(item)
         return item
 
     def request_answer(self, item_id: str) -> Item:
         """Answer a suggestion the user clicked on, or retry a finished/failed answer."""
         with self._lock:
             self._require_open()
-            item = self.report.item(item_id)
-            if item is None:
-                raise KeyError(item_id)
+            item = self._item(item_id)
             fut = self._futures.get(item_id)
             if fut is not None and fut.done():
                 del self._futures[item_id]  # retry
             if item.status != "active":
                 item.status = "active"
                 self._emit("item", item.model_dump(mode="json"))
-        self._submit(item)
+            self._submit(item)
         return item
 
     def set_item_status(self, item_id: str, status: str) -> Item:
-        """cancel a false voice trigger, dismiss a suggestion, or restore either."""
+        """Cancel a false voice trigger, dismiss a suggestion, or restore either."""
         if status not in ("active", "cancelled", "dismissed"):
             raise ValueError(status)
         with self._lock:
-            item = self.report.item(item_id)
-            if item is None:
-                raise KeyError(item_id)
+            self._require_open()
+            item = self._item(item_id)
             item.status = status
             if status != "active":
                 fut = self._futures.pop(item_id, None)
                 if fut is not None:
                     fut.cancel()  # a running answer finishes but is discarded in _answer
                 self.report.answers = [a for a in self.report.answers if a.item_id != item_id]
-        self._emit("item", item.model_dump(mode="json"))
+            self._emit("item", item.model_dump(mode="json"))
+            if status == "active" and item.is_command and self.report.answer_for(item_id) is None:
+                self._submit(item)  # a restored command gets its answer again
         return item
 
     def refine(self, item_id: str, text: str) -> Item:
         """A follow-up to an answered item ("Уточнить"): answered with the previous answer as context."""
         with self._lock:
             self._require_open()
-            parent = self.report.item(item_id)
-            if parent is None:
-                raise KeyError(item_id)
+            parent = self._item(item_id)
             prev = self.report.answer_for(item_id)
             context = f"Уточнение к задаче «{parent.text}»."
             if prev and prev.summary:
@@ -325,8 +326,14 @@ class LiveSession:
             item = Item(kind=ItemKind.QUESTION if text.strip().endswith("?") else ItemKind.TASK,
                         text=text.strip(), quote=context, origin=ItemOrigin.USER, detector="user", parent_id=item_id)
             self.report.items.append(item)
-        self._emit("item", item.model_dump(mode="json"))
-        self._submit(item)
+            self._emit("item", item.model_dump(mode="json"))
+            self._submit(item)
+        return item
+
+    def _item(self, item_id: str) -> Item:
+        item = self.report.item(item_id)
+        if item is None:
+            raise KeyError(item_id)
         return item
 
     # --- answering ------------------------------------------------------
@@ -334,8 +341,16 @@ class LiveSession:
         with self._lock:
             if item.id in self._futures:
                 return
+            if self.state in ("sealing", "finished"):
+                raise SessionClosed("встреча уже завершена")
             if len(self._futures) >= self.max_answers:
-                self._emit("limit", {"item_id": item.id, "message": f"достигнут лимит {self.max_answers} ответов"})
+                message = f"достигнут лимит {self.max_answers} ответов"
+                self._emit("limit", {"item_id": item.id, "message": message})
+                # A visible terminal state instead of "in progress" forever.
+                answer = Answer(item_id=item.id, status=AnswerStatus.FAILED, summary="Достигнут лимит ответов",
+                                body=f"На этой встрече {message}. Увеличьте лимит в настройках или ответьте позже.")
+                self.report.answers = [a for a in self.report.answers if a.item_id != item.id] + [answer]
+                self._emit("answer", answer.model_dump(mode="json"))
                 return
             self._futures[item.id] = self._pool.submit(self._answer, item)
 
@@ -344,6 +359,9 @@ class LiveSession:
             segments = list(self.report.segments)
 
         def progress(stage: str, **info: Any) -> None:
+            with self._lock:
+                if item.status != "active" or self.state in ("sealing", "finished"):
+                    return
             self._emit("stage", {"item_id": item.id, "stage": stage, **info})
 
         try:
@@ -352,10 +370,10 @@ class LiveSession:
             log.exception("answerer failed")
             answer = Answer(item_id=item.id, status=AnswerStatus.FAILED, summary="Ошибка", body=str(exc))
         with self._lock:
-            if self.state == "finished" or item.status != "active":
+            if self.state in ("sealing", "finished") or item.status != "active":
                 return  # sealed report, or the user cancelled the command meanwhile
             self.report.answers = [a for a in self.report.answers if a.item_id != item.id] + [answer]
-        self._emit("answer", answer.model_dump(mode="json"))
+            self._emit("answer", answer.model_dump(mode="json"))
 
     # --- live assist ----------------------------------------------------
     def assist(self, action: str, minutes: float = 1.0) -> dict:
@@ -366,7 +384,10 @@ class LiveSession:
         return result
 
     # --- finish ---------------------------------------------------------
-    def finish(self, deadline: float = FINISH_DEADLINE) -> MeetingReport:
+    def finish(self, deadline: float = FINISH_DEADLINE,
+               before_done: Callable[[MeetingReport], None] | None = None) -> MeetingReport:
+        """Seal the meeting: wait for answers (up to ``deadline``), build the recap,
+        call ``before_done`` (e.g. save the report), then emit ``done``."""
         with self._finish_lock:  # concurrent callers wait for the first one
             if self.state == "finished":
                 return self.report
@@ -382,6 +403,7 @@ class LiveSession:
                     break
                 wait(waiting, timeout=remaining)
             with self._lock:
+                self.state = "sealing"  # from here on nothing new is accepted or recorded
                 answered = {a.item_id for a in self.report.answers}
                 for iid, fut in self._futures.items():
                     item = self.report.item(iid)
@@ -399,8 +421,14 @@ class LiveSession:
             self._emit("recap", self.report.recap.model_dump(mode="json"))
             with self._lock:
                 self.state = "finished"
-            self._emit("done", {"id": self.report.id})
             self._pool.shutdown(wait=False, cancel_futures=True)
+            if before_done is not None:
+                try:
+                    before_done(self.report)
+                except Exception as exc:  # never swallow the report silently
+                    log.exception("before_done failed")
+                    self._emit("error", {"message": f"не удалось сохранить отчёт: {exc}", "retry": False})
+            self._emit("done", {"id": self.report.id})
             return self.report
 
     def close(self) -> None:
