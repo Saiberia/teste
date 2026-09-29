@@ -19,18 +19,23 @@ class FakeLLM:
     def __init__(self, detect: Callable[[str], dict] | None = None, recap: dict | None = None,
                  research: Callable[[str], ResearchResult] | None = None, fail: set[str] | None = None):
         self._detect = detect or (lambda prompt: {"items": []})
-        self._recap = recap or {"summary": "Обсудили игру.", "decisions": [], "action_items": []}
+        self._recap = recap or {"summary": "Обсудили игру.", "decisions": [], "action_items": [], "sections": []}
         self._research = research or (lambda prompt: ResearchResult(text=GOOD_ANSWER, sources=[]))
         self.fail = fail or set()
         self.calls: list[tuple[str, str]] = []
         self._lock = threading.Lock()
 
     def json(self, system: str, prompt: str, schema: dict, effort: str) -> dict:
-        kind = "detect" if system == DETECT_SYSTEM else "recap"
+        props = schema.get("properties", {})
+        kind = "detect" if system == DETECT_SYSTEM else "recap" if "decisions" in props else "assist" if "bullets" in props else "chat"
         with self._lock:
             self.calls.append((kind, prompt))
         if kind in self.fail:
             raise LLMError(f"{kind} boom")
+        if kind == "assist":
+            return {"text": "Итог от ИИ", "bullets": ["пункт"]}
+        if kind == "chat":
+            return {"answer": "Ответ по встрече", "suggestions": ["a?", "b?", "c?", "d?"]}
         return self._detect(prompt) if kind == "detect" else self._recap
 
     def research(self, system: str, prompt: str, effort: str, web_search: bool) -> ResearchResult:

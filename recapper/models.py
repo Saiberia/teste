@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -23,8 +24,9 @@ class ItemKind(str, Enum):
 
 
 class ItemOrigin(str, Enum):
-    MEETING = "meeting"  # heard in the conversation
-    USER = "user"  # asked explicitly by the user
+    VOICE = "voice"  # dictated to the assistant during the meeting ("Ассистент, ...")
+    MEETING = "meeting"  # heard in the conversation (suggestion)
+    USER = "user"  # typed by the user
 
 
 class Item(BaseModel):
@@ -37,6 +39,11 @@ class Item(BaseModel):
     speaker: str = ""
     start: float | None = None
     origin: ItemOrigin = ItemOrigin.MEETING
+    detector: str = ""  # command | llm | heuristic | user
+
+    @property
+    def is_command(self) -> bool:
+        return self.origin in (ItemOrigin.VOICE, ItemOrigin.USER)
 
 
 class Source(BaseModel):
@@ -58,6 +65,7 @@ class Answer(BaseModel):
     assumptions: list[str] = Field(default_factory=list)
     sources: list[Source] = Field(default_factory=list)
     confidence: str = "low"  # low | medium | high
+    warnings: list[str] = Field(default_factory=list)  # contract issues found in the model output
 
 
 class ActionItem(BaseModel):
@@ -66,8 +74,14 @@ class ActionItem(BaseModel):
     due: str = ""
 
 
+class RecapSection(BaseModel):
+    title: str
+    bullets: list[str] = Field(default_factory=list)
+
+
 class Recap(BaseModel):
     summary: str = ""
+    sections: list[RecapSection] = Field(default_factory=list)  # template-specific parts
     decisions: list[str] = Field(default_factory=list)
     action_items: list[ActionItem] = Field(default_factory=list)
 
@@ -75,6 +89,8 @@ class Recap(BaseModel):
 class MeetingReport(BaseModel):
     id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
     title: str = "Встреча"
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    template: str = "general"
     segments: list[Segment] = Field(default_factory=list)
     recap: Recap = Field(default_factory=Recap)
     items: list[Item] = Field(default_factory=list)
@@ -83,3 +99,20 @@ class MeetingReport(BaseModel):
 
     def answer_for(self, item_id: str) -> Answer | None:
         return next((a for a in self.answers if a.item_id == item_id), None)
+
+    def item(self, item_id: str) -> Item | None:
+        return next((i for i in self.items if i.id == item_id), None)
+
+    def rename_speaker(self, old: str, new: str) -> int:
+        """Rename a speaker everywhere (segments, items, action items)."""
+        count = 0
+        for seg in self.segments:
+            if seg.speaker == old:
+                seg.speaker, count = new, count + 1
+        for item in self.items:
+            if item.speaker == old:
+                item.speaker = new
+        for action in self.recap.action_items:
+            if action.owner == old:
+                action.owner = new
+        return count

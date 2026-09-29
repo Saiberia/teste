@@ -1,0 +1,7 @@
+{
+  "name": "English meeting",
+  "transcript": "Kate: Let's review the onboarding funnel.\nKate: Assistant, draft three hypotheses why day-one retention dropped in March.\nTom: Can you hear me?\nTom: We need to check the attribution model before Friday.",
+  "expect_commands": [["hypotheses", "retention"]],
+  "forbid": ["hear"],
+  "answer_should_mention": []
+}

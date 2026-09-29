@@ -3,7 +3,7 @@ from recapper.transcript import format_clock, parse_transcript, segments_to_text
 
 def test_plain_with_timestamps(meeting_text):
     segs = parse_transcript(meeting_text)
-    assert len(segs) == 12
+    assert len(segs) == 14
     assert segs[0].speaker == "Аня" and segs[0].start == 5.0
     assert segs[3].speaker == "Макс" and segs[3].start == 40.0
     assert "конверсию" in segs[3].text

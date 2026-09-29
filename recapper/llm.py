@@ -6,13 +6,13 @@ swap in another implementation without touching the pipeline.
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import anthropic
 
+from .contracts import extract_json
 from .models import Source
 
 log = logging.getLogger(__name__)
@@ -73,9 +73,15 @@ def collect_sources(content: list[Any]) -> list[Source]:
 
 
 class ClaudeLLM:
-    def __init__(self, model: str = "claude-opus-5-5", client: Any | None = None, web_search_max_uses: int = 5):
+    def __init__(self, model: str = "claude-opus-5-5", client: Any | None = None, web_search_max_uses: int = 5,
+                 api_key: str | None = None, timeout: float = 180.0, max_retries: int = 2):
         self.model = model
-        self.client = client if client is not None else anthropic.Anthropic()
+        if client is None:
+            kwargs: dict[str, Any] = {"timeout": timeout, "max_retries": max_retries}
+            if api_key:
+                kwargs["api_key"] = api_key
+            client = anthropic.Anthropic(**kwargs)
+        self.client = client
         self.web_search_max_uses = web_search_max_uses
 
     def _create(self, **kwargs: Any) -> Any:
@@ -103,8 +109,8 @@ class ClaudeLLM:
         if not texts:
             raise LLMError("no text in structured response")
         try:
-            return json.loads(texts[0].text)
-        except json.JSONDecodeError as exc:
+            return extract_json(texts[0].text)
+        except ValueError as exc:
             raise LLMError(f"invalid JSON from model: {exc}") from exc
 
     def research(self, system: str, prompt: str, effort: str = "high", web_search: bool = True) -> ResearchResult:
@@ -120,6 +126,7 @@ class ClaudeLLM:
                 "system": system,
                 "messages": messages,
                 "output_config": {"effort": effort},
+                "cache_control": {"type": "ephemeral"},
             }
             if tools:
                 kwargs["tools"] = tools
@@ -132,7 +139,5 @@ class ClaudeLLM:
             messages = [messages[0], {"role": "assistant", "content": response.content}]
         else:
             raise LLMError("web research did not finish after several continuations")
-        final_text = "".join(b.text for b in _texts(response.content)).strip()
-        if not final_text:
-            final_text = "".join(b.text for b in _texts(all_content)).strip()
+        final_text = "".join(b.text for b in _texts(all_content)).strip()
         return ResearchResult(text=final_text, sources=collect_sources(all_content))

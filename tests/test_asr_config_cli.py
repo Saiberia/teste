@@ -80,7 +80,7 @@ def test_cli_process_to_file(tmp_path, capsys):
                      "--ask", "Какой бюджет на награды?", "--out", str(out), "--no-web"])
     assert code == 0
     text = out.read_text("utf-8")
-    assert "монетизации" in text and "Какой бюджет на награды?" in text
+    assert "Допиши механику монетизации" in text and "Какой бюджет на награды?" in text
     assert "офлайн" in capsys.readouterr().err
 
 
@@ -113,4 +113,4 @@ def test_module_entrypoint_runs():
                          cwd=root, capture_output=True, text=True, timeout=60,
                          env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(root)})
     assert res.returncode == 0, res.stderr
-    assert "## Вопросы и задачи" in res.stdout
+    assert "## Мои задачи ассистенту (2)" in res.stdout and "## Прозвучало на встрече" in res.stdout

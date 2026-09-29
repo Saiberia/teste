@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .models import MeetingReport
@@ -30,7 +30,8 @@ class ReportStore:
         stored = report if self.keep_segments else report.model_copy(update={"segments": []})
         with self._lock:
             self._conn.execute(
-                "INSERT OR REPLACE INTO reports (id, owner, title, created_at, body) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO reports (id, owner, title, created_at, body) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET title = excluded.title, body = excluded.body",
                 (report.id, owner, report.title, datetime.now(timezone.utc).isoformat(), stored.model_dump_json()),
             )
             self._conn.commit()
@@ -71,6 +72,23 @@ class ReportStore:
             cur = self._conn.execute(query, args)
             self._conn.commit()
         return cur.rowcount > 0
+
+    def all(self, owner: str, limit: int = 200) -> list[MeetingReport]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT body FROM reports WHERE owner = ? ORDER BY created_at DESC, rowid DESC LIMIT ?", (owner, limit)
+            ).fetchall()
+        return [MeetingReport.model_validate_json(r[0]) for r in rows]
+
+    def purge_older_than(self, days: int) -> int:
+        """Retention: drop reports older than ``days`` (0 disables)."""
+        if days <= 0:
+            return 0
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM reports WHERE created_at < ?", (cutoff,))
+            self._conn.commit()
+        return cur.rowcount
 
     def close(self) -> None:
         self._conn.close()

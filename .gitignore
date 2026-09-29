@@ -5,3 +5,9 @@ __pycache__/
 *.egg-info/
 build/
 .venv/
+node_modules/
+desktop/dist/
+dist/
+build/
+eval-out/
+*.jsonl

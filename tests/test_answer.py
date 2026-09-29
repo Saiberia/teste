@@ -1,6 +1,7 @@
 from recapper import answer as answer_mod
 from recapper.answer import LLMAnswerer, OfflineAnswerer, parse_answer_text, transcript_context
 from recapper.llm import ResearchResult
+from recapper.memory import MemoryHit
 from recapper.models import AnswerStatus, Item, ItemKind, Segment
 from recapper.transcript import parse_transcript
 from tests.fakes import GOOD_ANSWER, FakeLLM, web_source
@@ -42,18 +43,48 @@ def test_llm_answerer_failure_returns_failed():
 
 def test_offline_answerer_uses_kb(kb):
     ans = OfflineAnswerer(kb).answer(ITEM, [])
-    assert ans.status == AnswerStatus.NEEDS_LLM
-    assert "базе знаний" in ans.body and ans.sources
+    assert ans.status == AnswerStatus.NEEDS_LLM and ans.summary == ""
+    assert "Материалы компании" in ans.body and ans.sources
 
 
 def test_offline_answerer_without_kb():
     ans = OfflineAnswerer().answer(ITEM, [])
-    assert "ничего подходящего" in ans.body and ans.sources == []
+    assert "Ничего подходящего" in ans.body and ans.sources == []
 
 
-def test_transcript_context_trims_long_transcripts(monkeypatch):
-    monkeypatch.setattr(answer_mod, "MAX_TRANSCRIPT_CHARS", 200)
-    segs = [Segment(text=f"реплика {i} " + "слово " * 10) for i in range(100)]
+def test_offline_answerer_uses_memory_of_past_meetings():
+    hit = MemoryHit("m1", "Прошлая встреча", "2026-09-01", "Решили считать атрибуцию по промокодам", 1.0)
+    ans = OfflineAnswerer(memory=lambda q: [hit]).answer(ITEM, [])
+    assert "Из прошлых встреч" in ans.body and ans.sources[0].ref == "meeting:m1"
+
+
+def test_llm_answerer_uses_memory_and_flags_unknown_meeting_refs():
+    hit = MemoryHit("m1", "Прошлая", "2026-09-01", "атрибуция по промокодам", 1.0)
+    text = GOOD_ANSWER + "\nСм. [meeting:m1] и [meeting:zzz]"
+    llm = FakeLLM(research=lambda p: ResearchResult(text=text))
+    ans = LLMAnswerer(llm, memory=lambda q: [hit], language="en").answer(ITEM, [])
+    prompt = llm.calls[0][1]
+    assert "<past_meetings>" in prompt and "[meeting:m1]" in prompt and prompt.rstrip().endswith("English.")
+    assert any(s.ref == "meeting:m1" for s in ans.sources)
+    assert any("zzz" in w for w in ans.warnings)
+
+
+def test_llm_answerer_empty_text_is_failed():
+    ans = LLMAnswerer(FakeLLM(research=lambda p: ResearchResult(text="  "))).answer(ITEM, [])
+    assert ans.status == AnswerStatus.FAILED and ans.warnings == ["empty answer"]
+
+
+def test_parse_answer_does_not_treat_words_as_headers():
+    f = parse_answer_text("## Коротко\nЧерновик по теме игры.\n## Черновик\nТело\n## Допущения\n- нет\n## Уверенность\nhigh")
+    assert f["summary"] == "Черновик по теме игры." and f["body"] == "Тело" and f["confidence"] == "high"
+
+
+def test_transcript_context_long_meeting_picks_relevant_and_recent(monkeypatch):
+    monkeypatch.setattr(answer_mod, "MAX_TRANSCRIPT_CHARS", 3000)
+    segs = [Segment(text=f"реплика {i} " + "обычный текст " * 5) for i in range(300)]
     segs[70] = Segment(text="Нам надо дописать механику монетизации игры сейчас")
-    ctx = transcript_context(ITEM, segs)
-    assert "монетизации" in ctx and "реплика 0 " not in ctx and ctx.startswith("…")
+    item = ITEM.model_copy(update={"quote": ""})  # typed question: no quote to anchor on
+    ctx = transcript_context(item, segs)
+    assert "монетизации" in ctx  # relevant window found by search, not by position
+    assert "реплика 299" in ctx  # the latest speech is always included
+    assert "реплика 0 " not in ctx and "…" in ctx and len(ctx) <= 3000

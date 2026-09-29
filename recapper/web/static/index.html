@@ -128,6 +128,7 @@ function renderItems() {
       if (a.summary) d.append(el("p", {}, a.summary));
       if (a.body) d.append(el("pre", {}, a.body));
       if (a.assumptions?.length) d.append(el("p", { class: "muted" }, "Допущения: " + a.assumptions.join("; ")));
+      if (a.warnings?.length) d.append(el("p", { class: "err" }, "Проверка ответа ИИ: " + a.warnings.join("; ")));
       if (a.sources?.length) {
         const s = el("div", { class: "muted" }, "Источники: ");
         a.sources.forEach((src, i) => {
