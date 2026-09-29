@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Созвон: игра Самоката → Купер</title>
+</head>
+<body>
+  <h1>Тестовая «встреча»</h1>
+  <p>Играет звук «собеседников» (тон с модуляцией, как речь). Нажмите кнопку, чтобы начать.</p>
+  <button id="play" type="button">Включить звук</button>
+  <p id="state">stopped</p>
+  <script>
+    // Speech-like test signal: 220 Hz + 660 Hz tones, amplitude-modulated at 3 Hz.
+    document.getElementById("play").addEventListener("click", async () => {
+      const ctx = new AudioContext();
+      const gain = ctx.createGain();
+      gain.gain.value = 0.25;
+      const mod = ctx.createOscillator();
+      mod.frequency.value = 3;
+      const modGain = ctx.createGain();
+      modGain.gain.value = 0.12;
+      mod.connect(modGain).connect(gain.gain);
+      for (const f of [220, 660]) {
+        const osc = ctx.createOscillator();
+        osc.frequency.value = f;
+        osc.connect(gain);
+        osc.start();
+      }
+      mod.start();
+      gain.connect(ctx.destination);
+      await ctx.resume();
+      window.__audio = ctx;
+      document.getElementById("state").textContent = ctx.state;
+    });
+  </script>
+</body>
+</html>

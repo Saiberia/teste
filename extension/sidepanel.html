@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Recapper</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><img src="icons/icon32.png" alt="" width="20" height="20"><strong data-i18n="app_name">Recapper</strong></div>
+    <span id="conn" class="chip" role="status"></span>
+    <button id="settings-toggle" class="icon-btn" type="button" aria-expanded="false" aria-controls="settings" data-i18n-title="settings" data-i18n-aria="settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+    </button>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button type="button" role="tab" id="tab-assistant" aria-selected="true" aria-controls="view-assistant" data-i18n="tab_assistant">Ассистент</button>
+    <button type="button" role="tab" id="tab-web" aria-selected="false" aria-controls="view-web" data-i18n="tab_web">Веб-панель</button>
+  </nav>
+
+  <div id="banner" class="banner" role="alert" hidden>
+    <span id="banner-text"></span>
+    <button id="banner-close" type="button" class="icon-btn small" aria-label="×">×</button>
+  </div>
+
+  <main id="view-assistant" role="tabpanel" aria-labelledby="tab-assistant">
+    <!-- Settings -->
+    <section id="settings" class="card" hidden>
+      <h2 data-i18n="settings_title">Подключение к серверу</h2>
+      <label class="field">
+        <span data-i18n="server_url">Адрес сервера</span>
+        <input id="server-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:8000">
+        <small class="muted" data-i18n="server_url_hint"></small>
+      </label>
+      <label class="field">
+        <span data-i18n="token">Токен доступа</span>
+        <span class="input-row">
+          <input id="token" type="password" autocomplete="off" spellcheck="false">
+          <button id="token-toggle" type="button" class="btn ghost small" data-i18n="show">Показать</button>
+        </span>
+        <small class="muted" data-i18n="token_hint"></small>
+      </label>
+      <div class="row">
+        <button id="save-settings" type="button" class="btn primary" data-i18n="save">Сохранить</button>
+        <button id="test-conn" type="button" class="btn" data-i18n="test_conn">Проверить подключение</button>
+      </div>
+      <p id="conn-result" class="result" aria-live="polite"></p>
+      <p id="asr-warning" class="warn-text" hidden data-i18n="asr_none_warn"></p>
+      <div class="mic-row">
+        <span><span data-i18n="mic_title">Микрофон</span>: <strong id="mic-state"></strong></span>
+        <button id="mic-grant" type="button" class="btn small" data-i18n="mic_grant">Разрешить микрофон</button>
+      </div>
+      <small class="muted" data-i18n="mic_grant_hint"></small>
+      <p><a id="open-web" href="#" target="_blank" rel="noopener noreferrer" data-i18n="open_web">Открыть веб-интерфейс</a></p>
+    </section>
+
+    <!-- Meeting: choose or create -->
+    <section id="meeting-pick" class="card" hidden>
+      <h2 data-i18n="meeting">Встреча</h2>
+      <label class="field">
+        <span data-i18n="open_sessions">Открытые встречи на сервере</span>
+        <span class="input-row">
+          <select id="session-select"></select>
+          <button id="refresh-sessions" type="button" class="btn ghost small" data-i18n="refresh">Обновить</button>
+        </span>
+      </label>
+      <button id="attach" type="button" class="btn" data-i18n="attach">Подключиться</button>
+      <hr>
+      <h3 data-i18n="new_meeting">Новая встреча</h3>
+      <label class="field">
+        <span data-i18n="title_ph">Название встречи</span>
+        <input id="new-title" type="text" maxlength="200" autocomplete="off">
+      </label>
+      <label class="field">
+        <span data-i18n="template">Шаблон отчёта</span>
+        <select id="template"></select>
+      </label>
+      <button id="create-session" type="button" class="btn primary" data-i18n="create">Создать встречу</button>
+    </section>
+
+    <!-- Meeting: attached -->
+    <section id="meeting-current" class="card" hidden>
+      <div class="row between">
+        <div class="grow">
+          <h2 id="meeting-title"></h2>
+          <span id="meeting-state" class="chip"></span>
+        </div>
+        <button id="detach" type="button" class="btn ghost small" data-i18n="detach">Отключиться</button>
+      </div>
+    </section>
+
+    <!-- Capture -->
+    <section id="capture" class="card" hidden>
+      <h2 data-i18n="capture">Запись звука</h2>
+      <label class="check"><input id="consent" type="checkbox"> <span data-i18n="consent">Участники знают о записи</span></label>
+      <label class="check"><input id="src-tab" type="checkbox" checked> <span data-i18n="src_tab">Звук вкладки встречи</span></label>
+      <label class="check"><input id="src-mic" type="checkbox" checked> <span data-i18n="src_mic">Мой микрофон</span></label>
+      <p id="target-tab" class="muted small"></p>
+      <div class="row">
+        <button id="start-capture" type="button" class="btn primary rec" data-i18n="start">Начать запись</button>
+        <button id="stop-capture" type="button" class="btn danger" data-i18n="stop" hidden>Остановить запись</button>
+      </div>
+      <p id="capture-status" class="result" aria-live="polite"></p>
+      <div id="meters" class="meters"></div>
+      <ul id="capture-warnings" class="warnings"></ul>
+      <p class="hint" data-i18n="voice_hint"></p>
+    </section>
+
+    <!-- Results -->
+    <section id="tasks" class="card" hidden>
+      <h2><span data-i18n="my_tasks">Мои задачи ассистенту</span> <span id="tasks-count" class="count"></span></h2>
+      <div id="tasks-list" class="list"></div>
+    </section>
+
+    <section id="heard" class="card" hidden>
+      <h2><span data-i18n="heard">Прозвучало на встрече</span> <span id="heard-count" class="count"></span></h2>
+      <p class="muted small" data-i18n="heard_hint"></p>
+      <div id="heard-list" class="list"></div>
+    </section>
+
+    <section id="assist" class="card" hidden>
+      <h2 data-i18n="quick_actions">Быстрые действия</h2>
+      <div id="assist-actions" class="chips-row"></div>
+      <div id="assist-result" class="assist-result" aria-live="polite"></div>
+    </section>
+
+    <section id="finish" class="card" hidden>
+      <button id="finish-btn" type="button" class="btn" data-i18n="finish">Завершить встречу</button>
+      <div id="finish-confirm" class="confirm" hidden>
+        <p data-i18n="finish_confirm"></p>
+        <div class="row">
+          <button id="finish-yes" type="button" class="btn danger" data-i18n="finish_yes">Да, завершить</button>
+          <button id="finish-cancel" type="button" class="btn ghost" data-i18n="cancel">Отмена</button>
+        </div>
+      </div>
+      <p id="finishing" class="result" hidden><span class="spinner" aria-hidden="true"></span> <span data-i18n="finishing"></span></p>
+      <div id="done-card" hidden>
+        <h2 data-i18n="done_title">Встреча завершена</h2>
+        <p><a id="report-link" class="btn primary" href="#" target="_blank" rel="noopener noreferrer" data-i18n="open_report">Открыть отчёт</a></p>
+        <div id="recap"></div>
+        <button id="new-after-done" type="button" class="btn ghost" data-i18n="new_meeting">Новая встреча</button>
+      </div>
+    </section>
+  </main>
+
+  <footer id="askbar" hidden>
+    <form id="ask-form" class="ask">
+      <input id="ask-input" type="text" maxlength="2000" autocomplete="off" data-i18n-ph="ask_ph">
+      <button id="ask-btn" type="submit" class="btn primary" data-i18n="ask">Спросить</button>
+    </form>
+  </footer>
+
+  <main id="view-web" role="tabpanel" aria-labelledby="tab-web" hidden>
+    <p class="muted small" data-i18n="web_hint"></p>
+    <iframe id="web-frame" title="Recapper"></iframe>
+  </main>
+
+  <div id="toasts" aria-live="polite"></div>
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>

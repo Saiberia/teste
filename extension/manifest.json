@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Recapper — ассистент встреч",
+  "short_name": "Recapper",
+  "version": "0.1.0",
+  "description": "Слушает встречу в браузере (Google Meet, Телемост, Zoom, Толк, Teams) и показывает ответы ассистента Recapper в боковой панели.",
+  "minimum_chrome_version": "116",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "Recapper — открыть панель ассистента",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": ["sidePanel", "tabCapture", "offscreen", "storage", "activeTab"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "optional_host_permissions": ["https://*/*"],
+  "commands": {
+    "_execute_action": {
+      "suggested_key": { "default": "Alt+Shift+R" },
+      "description": "Открыть панель Recapper"
+    }
+  }
+}

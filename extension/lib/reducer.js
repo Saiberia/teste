@@ -18,6 +18,7 @@ export function initialState(sessionId = null) {
     answers: {}, // item_id -> Answer
     requested: {}, // item_id -> true while an answer is being prepared at the user's request
     limited: {}, // item_id -> message (answer limit reached)
+    stages: {}, // item_id -> latest progress stage while answering (understood | memory | docs | web | writing)
     assist: null, // latest Live Assist result {action, title, text, bullets, source, seq}
     assistPending: null, // action id the user clicked, until its result arrives
     errors: [], // latest server-side errors [{seq, message, retry}]
@@ -46,21 +47,31 @@ export function reduceEvents(state, response) {
     answers: { ...state.answers },
     requested: { ...state.requested },
     limited: { ...state.limited },
+    stages: { ...state.stages },
     errors: [...state.errors],
   };
   for (const ev of events) {
     const d = ev.data || {};
     switch (ev.type) {
-      case "item":
+      case "item": // also re-sent when its status changes (cancelled / dismissed / active again)
         if (!d.id) break;
         if (!(d.id in s.items)) { s.order.push(d.id); s.seqOf[d.id] = ev.seq; }
         s.items[d.id] = d;
+        if (d.status && d.status !== "active") {
+          delete s.answers[d.id];
+          delete s.requested[d.id];
+          delete s.stages[d.id];
+        }
         break;
       case "answer":
         if (!d.item_id) break;
         s.answers[d.item_id] = d;
         delete s.requested[d.item_id];
         delete s.limited[d.item_id];
+        delete s.stages[d.item_id];
+        break;
+      case "stage":
+        if (d.item_id && d.stage && !s.answers[d.item_id]) s.stages[d.item_id] = String(d.stage);
         break;
       case "limit":
         if (d.item_id) { s.limited[d.item_id] = d.message || "limit"; delete s.requested[d.item_id]; }
@@ -127,10 +138,17 @@ export function cardStatus(state, id) {
   return "idle";
 }
 
+/** Items the user or another client cancelled (false voice trigger) or dismissed are not shown. */
+export const isVisible = (item) => !item?.status || item.status === "active";
+
 /** Everything the side panel renders, newest cards first. */
 export function selectView(state) {
   const cards = state.order
-    .map((id) => ({ id, item: state.items[id], answer: state.answers[id] || null, status: cardStatus(state, id), seq: state.seqOf[id] }))
+    .filter((id) => isVisible(state.items[id]))
+    .map((id) => ({
+      id, item: state.items[id], answer: state.answers[id] || null, status: cardStatus(state, id),
+      stage: state.stages[id] || null, seq: state.seqOf[id],
+    }))
     .sort((a, b) => b.seq - a.seq);
   return {
     tasks: cards.filter((c) => isCommand(c.item)),

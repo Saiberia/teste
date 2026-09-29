@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Recapper — микрофон</title>
+  <link rel="stylesheet" href="sidepanel.css">
+  <style>
+    body { display: flex; justify-content: center; padding: 32px 16px; }
+    .perm { max-width: 560px; width: 100%; }
+    .perm h1 { font-size: 20px; margin: 0 0 8px; display: flex; gap: 8px; align-items: center; }
+    .perm .btn { margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <section class="card perm">
+    <h1><img src="icons/icon48.png" alt="" width="28" height="28"><span data-i18n="perm_title">Доступ к микрофону для Recapper</span></h1>
+    <p data-i18n="perm_body"></p>
+    <button id="grant" type="button" class="btn primary" data-i18n="perm_button">Разрешить доступ к микрофону</button>
+    <p id="perm-result" class="result" aria-live="polite"></p>
+    <button id="close" type="button" class="btn ghost" data-i18n="perm_close" hidden>Закрыть вкладку</button>
+  </section>
+  <script type="module" src="permissions.js"></script>
+</body>
+</html>

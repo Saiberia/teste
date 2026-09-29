@@ -1,0 +1,16 @@
+{
+  "name": "recapper-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Recapper browser extension (Manifest V3): meeting tab + microphone capture, live answers in the side panel.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/unit/*.test.mjs",
+    "test:e2e": "xvfb-run -a node test/e2e/extension.e2e.mjs",
+    "pack": "node scripts/pack.mjs",
+    "icons": "node scripts/make-icons.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -11,11 +11,11 @@
     "start": "electron .",
     "test": "node --test \"test/unit/*.test.js\"",
     "test:e2e": "node --test --test-concurrency=1 --test-timeout=240000 \"test/e2e/*.test.js\"",
-    "build:backend": "python3 ../packaging/build_server.py",
-    "dist": "electron-builder",
-    "dist:mac": "electron-builder --mac",
-    "dist:win": "electron-builder --win",
-    "dist:dir": "electron-builder --dir"
+    "build:backend": "python ../packaging/build_server.py",
+    "dist": "electron-builder --publish never",
+    "dist:mac": "electron-builder --mac --publish never",
+    "dist:win": "electron-builder --win --publish never",
+    "dist:dir": "electron-builder --dir --publish never"
   },
   "dependencies": {
     "electron-audio-loopback": "^1.0.6"
@@ -47,6 +47,7 @@
       }
     ],
     "asar": true,
+    "beforePack": "scripts/check-backend.js",
     "mac": {
       "category": "public.app-category.productivity",
       "target": [
@@ -63,10 +64,14 @@
         "NSAudioCaptureUsageDescription": "Recapper записывает системный звук (голоса других участников созвона), чтобы составлять живые итоги встречи.",
         "NSScreenCaptureUsageDescription": "Recapper использует разрешение «Запись экрана и системного звука» только для захвата звука созвона; изображение экрана не записывается.",
         "LSMultipleInstancesProhibited": true
-      }
+      },
+      "identity": "-",
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "icon": "resources/icon.png"
     },
     "dmg": {
-      "title": "Recapper ${version}"
+      "title": "Recapper ${version}",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "win": {
       "target": [
@@ -76,7 +81,9 @@
             "x64"
           ]
         }
-      ]
+      ],
+      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "icon": "resources/icon.png"
     },
     "nsis": {
       "oneClick": false,
@@ -84,13 +91,24 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Recapper"
+      "shortcutName": "Recapper",
+      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "installerLanguages": [
+        "ru_RU",
+        "en_US"
+      ],
+      "multiLanguageInstaller": true,
+      "deleteAppDataOnUninstall": false
     },
     "linux": {
       "target": [
         "AppImage"
       ],
-      "category": "Office"
-    }
+      "category": "Office",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "publish": null,
+    "npmRebuild": false,
+    "artifactName": "${productName}-${version}-${arch}.${ext}"
   }
 }

@@ -12,6 +12,21 @@ const REPO_ROOT = path.resolve(APP_DIR, '..');
 const FAKE_BACKEND = path.join(APP_DIR, 'test', 'fixtures', 'fake_backend.py');
 const PYTHON = process.env.RECAPPER_TEST_PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
 
+/** Unpacked packaged build in desktop/dist (or $RECAPPER_PACKAGED_APP), or null. */
+function findPackagedApp() {
+  if (process.env.RECAPPER_PACKAGED_APP) return path.resolve(process.env.RECAPPER_PACKAGED_APP);
+  const dist = path.join(APP_DIR, 'dist');
+  const candidates = [];
+  if (process.platform === 'linux') candidates.push(path.join(dist, 'linux-unpacked', 'recapper-desktop'));
+  if (process.platform === 'win32') candidates.push(path.join(dist, 'win-unpacked', 'Recapper.exe'));
+  if (process.platform === 'darwin') {
+    for (const d of ['mac-arm64', 'mac', 'mac-universal', 'mac-x64']) {
+      candidates.push(path.join(dist, d, 'Recapper.app', 'Contents', 'MacOS', 'Recapper'));
+    }
+  }
+  return candidates.find((c) => fs.existsSync(c)) || null;
+}
+
 /** Reason to skip GUI tests, or null. */
 function guiSkipReason() {
   if (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
@@ -24,13 +39,17 @@ function tmpDir(prefix = 'recapper-e2e-') {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
-async function launchApp({ env = {}, userDataDir = tmpDir() } = {}) {
+/**
+ * Launches the app. Dev mode by default (electron binary + desktop/ dir);
+ * pass `executablePath` to launch a packaged build instead.
+ */
+async function launchApp({ env = {}, userDataDir = tmpDir(), executablePath = null } = {}) {
   const args = [];
   // Chromium refuses to run as root with its sandbox (CI containers).
   if (process.platform === 'linux' && process.getuid && process.getuid() === 0) args.push('--no-sandbox');
-  args.push(APP_DIR);
+  if (!executablePath) args.push(APP_DIR);
   const app = await _electron.launch({
-    executablePath: require('electron'),
+    executablePath: executablePath || require('electron'),
     args,
     cwd: APP_DIR,
     env: {
@@ -133,6 +152,6 @@ async function closeApp(app) {
 }
 
 module.exports = {
-  APP_DIR, REPO_ROOT, FAKE_BACKEND, PYTHON, guiSkipReason, tmpDir, launchApp, waitFor, waitForPage, windowPages,
+  APP_DIR, REPO_ROOT, FAKE_BACKEND, PYTHON, guiSkipReason, findPackagedApp, tmpDir, launchApp, waitFor, waitForPage, windowPages,
   isMainUrl, isPanelUrl, authed, isAlive, waitDead, closeApp, requestJson,
 };

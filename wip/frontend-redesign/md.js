@@ -1,0 +1,51 @@
+/* Minimal, safe Markdown -> HTML for AI answers.
+   Everything is HTML-escaped first; only a small whitelist of constructs is
+   turned back into tags, links are limited to http(s), and references
+   [doc:file] / [meeting:id] become source chips (meetings link to their report). */
+(function () {
+  function esc(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function inlineEscaped(s) {
+    return s
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!?:;]|$)/g, "$1<em>$2</em>")
+      .replace(/\[([^\]]+)\]\((?:&lt;)?(https?:\/\/[^\s)]+?)(?:&gt;)?\)/g,
+        (m, text, url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`)
+      .replace(/\[meeting:([\w-]{1,64})(?:@[\d.]+)?\]/g, '<a class="ref" href="#/meeting/$1">meeting:$1</a>')
+      .replace(/\[doc:([^\]]+)\]/g, '<span class="ref">doc:$1</span>');
+  }
+  /** One line of inline markdown (summaries, titles): escaped, no block elements. */
+  function inline(text) { return inlineEscaped(esc(text || "")); }
+  function render(md) {
+    const lines = esc(md || "").split("\n");
+    const out = [];
+    let list = null, table = null;
+    const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+    const closeTable = () => { if (table) { out.push("</tbody></table></div>"); table = null; } };
+    for (const raw of lines) {
+      const line = raw.trimEnd();
+      const cells = /^\|(.+)\|$/.exec(line.trim());
+      if (cells) {
+        closeList();
+        const parts = cells[1].split("|").map((c) => c.trim());
+        if (parts.every((c) => /^:?-{2,}:?$/.test(c))) continue; // separator row
+        if (!table) { out.push('<div class="table-wrap"><table><tbody>'); table = true; out.push("<tr>" + parts.map((c) => `<th>${inlineEscaped(c)}</th>`).join("") + "</tr>"); continue; }
+        out.push("<tr>" + parts.map((c) => `<td>${inlineEscaped(c)}</td>`).join("") + "</tr>");
+        continue;
+      }
+      closeTable();
+      let m;
+      if ((m = /^(#{1,4})\s+(.*)$/.exec(line))) { closeList(); const lvl = Math.min(m[1].length + 2, 6); out.push(`<h${lvl}>${inlineEscaped(m[2])}</h${lvl}>`); continue; }
+      if ((m = /^\s*[-*•]\s+(.*)$/.exec(line))) { if (list !== "ul") { closeList(); out.push("<ul>"); list = "ul"; } out.push(`<li>${inlineEscaped(m[1])}</li>`); continue; }
+      if ((m = /^\s*\d+[.)]\s+(.*)$/.exec(line))) { if (list !== "ol") { closeList(); out.push("<ol>"); list = "ol"; } out.push(`<li>${inlineEscaped(m[1])}</li>`); continue; }
+      if ((m = /^&gt;\s?(.*)$/.exec(line))) { closeList(); out.push(`<blockquote>${inlineEscaped(m[1])}</blockquote>`); continue; }
+      closeList();
+      if (line.trim()) out.push(`<p>${inlineEscaped(line)}</p>`);
+    }
+    closeList(); closeTable();
+    return out.join("\n");
+  }
+  window.RecapperMarkdown = { render, inline, esc };
+})();

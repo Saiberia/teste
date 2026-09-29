@@ -304,7 +304,7 @@ test('fetchSettings sends the token and tolerates failures', async () => {
 
 // ------------------------------------------------- controller (fake media) ---
 /** Minimal Web Audio + MediaDevices fake: ScriptProcessor path, driven manually. */
-function fakeMediaEnv({ micFails = false, systemFails = false, rate = 16000, bridge = null } = {}) {
+function fakeMediaEnv({ micFails = false, systemFails = false, systemDelayMs = 0, rate = 16000, bridge = null } = {}) {
   const env = { contexts: [], processors: [], tracks: [], displayCalls: 0, userCalls: 0, bridgeCalls: [] };
   class Track {
     constructor(kind) { this.kind = kind; this.stopped = false; this.listeners = {}; env.tracks.push(this); }
@@ -336,7 +336,9 @@ function fakeMediaEnv({ micFails = false, systemFails = false, rate = 16000, bri
       async getDisplayMedia() {
         env.displayCalls++;
         if (systemFails) throw new Error('NotReadableError: no loopback');
-        return new Stream([new Track('video'), new Track('audio')]);
+        if (systemDelayMs) await new Promise((r) => setTimeout(r, systemDelayMs)); // e.g. a hung loopback handler
+        env.lateStream = new Stream([new Track('video'), new Track('audio')]);
+        return env.lateStream;
       },
     },
   };
@@ -456,4 +458,126 @@ test('controller: start() validates input and refuses a second concurrent captur
   await assert.rejects(w.RecapperCapture.start({ sessionId: 'b' }), (e) => e.code === 'already_running');
   await w.RecapperCapture.stop();
   await w.RecapperCapture.stop(); // idempotent
+});
+
+// ------------------------------------------- levels, pause, watchdog, timeouts ---
+test('levelFromRms maps RMS to a 0..1 dB scale', () => {
+  const L = I.levelFromRms;
+  assert.equal(L(0), 0);
+  assert.equal(L(NaN), 0);
+  assert.equal(L(0.001), 0, '-60 dBFS');
+  assert.equal(L(1), 1);
+  assert.equal(L(4), 1, 'clamped');
+  assert.ok(Math.abs(L(0.1) - 2 / 3) < 1e-9, '-20 dBFS -> 0.667');
+  assert.ok(Math.abs(L(Math.pow(10, -30 / 20)) - 0.5) < 1e-9, '-30 dBFS -> 0.5');
+  assert.ok(L(0.05) > L(0.01) && L(0.01) > L(0.002), 'monotonic');
+});
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+test('onLevel reports ~12 Hz per-source meters; null for sources not captured', async () => {
+  const { env, extra } = fakeMediaEnv({ bridge: true });
+  const w = loadCapture({ ...extra, fetch: serverFetch() });
+  const levels = [];
+  await w.RecapperCapture.start({
+    sessionId: 'lv', token: 't', sources: ['mic'], chunkSeconds: 5, silenceThreshold: 0.004,
+    onLevel: (l) => levels.push({ ...l }),
+  });
+  const proc = env.processors[0];
+  const tone = sine(440, 16000, 0.3, 0.1 * Math.SQRT2); // RMS 0.1 = -20 dBFS
+  env.feed(proc, tone.slice(0, 2048));
+  env.feed(proc, tone.slice(2048, 4096));
+  assert.ok(Math.abs(w.RecapperCapture.levels.mic - 2 / 3) < 0.03, `levels getter ${w.RecapperCapture.levels.mic}`);
+  assert.equal(w.RecapperCapture.levels.system, null);
+  await sleep(400);
+  assert.ok(levels.length >= 3 && levels.length <= 8, `~12 Hz, got ${levels.length} in 400 ms`);
+  const last = levels.at(-1);
+  assert.equal(last.system, null, 'system not captured');
+  assert.ok(Math.abs(last.mic - 2 / 3) < 0.03, `mic level ${last.mic}`);
+  await sleep(600);
+  assert.equal(levels.at(-1).mic, 0, 'stale source (no frames for 500 ms) reads 0');
+  await w.RecapperCapture.stop();
+  const n = levels.length;
+  await sleep(200);
+  assert.equal(levels.length, n, 'no more level callbacks after stop()');
+  assert.deepEqual({ ...w.RecapperCapture.levels }, { mic: null, system: null });
+});
+
+test('pause() uploads what was recorded, drops audio while paused, keeps offsets on wall-clock; elapsed() excludes pauses', async () => {
+  const { env, extra } = fakeMediaEnv({ bridge: true });
+  const fetch = serverFetch();
+  const w = loadCapture({ ...extra, fetch });
+  const C = w.RecapperCapture;
+  const statuses = [];
+  assert.equal(C.elapsed(), 0);
+  assert.equal(await C.pause(), false, 'nothing to pause');
+  await C.start({ sessionId: 'p', token: 't', sources: ['mic'], chunkSeconds: 2, silenceThreshold: 0.004, onStatus: (m, d) => statuses.push(d.code) });
+  const proc = env.processors[0];
+  const feed = (seconds) => {
+    const x = noise(Math.round(16000 * seconds), 0.2, Math.round(seconds * 1000));
+    for (let i = 0; i < x.length; i += 4096) env.feed(proc, x.slice(i, i + 4096));
+  };
+  feed(1.5);
+  await sleep(120);
+  assert.ok(C.elapsed() > 0.1, `elapsed ${C.elapsed()}`);
+  assert.equal(await C.pause(), true);
+  assert.equal(C.paused, true);
+  assert.equal(C.running, true, 'devices stay open while paused');
+  assert.equal(await C.pause(), false, 'already paused');
+  const e1 = C.elapsed();
+  feed(3); // dropped
+  await sleep(150);
+  assert.equal(C.elapsed(), e1, 'elapsed frozen while paused');
+  await sleep(50);
+  assert.equal(fetch.uploads.length, 1, 'the 1.5 s recorded before the pause was uploaded');
+  assert.ok(fetch.uploads[0].offset < 0.5);
+  assert.equal(await C.resume(), true);
+  assert.equal(C.paused, false);
+  feed(2);
+  await sleep(100);
+  assert.ok(C.elapsed() > e1);
+  await C.stop();
+  assert.equal(fetch.uploads.length, 2, 'nothing uploaded from the paused period');
+  const gap = fetch.uploads[1].offset - fetch.uploads[0].offset;
+  assert.ok(Math.abs(gap - 4.5) < 0.01, `second chunk starts 1.5 s + 3 s (pause) later: ${gap}`);
+  assert.deepEqual(env.bridgeCalls.filter((c) => c.startsWith('capturing')), ['capturing:true', 'capturing:false', 'capturing:true', 'capturing:false']);
+  assert.ok(statuses.includes('paused') && statuses.includes('resumed'));
+  assert.equal(C.elapsed(), 0, 'not running');
+  assert.equal(await C.resume(), false);
+});
+
+test('silence watchdog warns once per source that delivers only digital silence', async () => {
+  const { env, extra } = fakeMediaEnv({ bridge: true });
+  const w = loadCapture({ ...extra, fetch: serverFetch() });
+  const statuses = [];
+  await w.RecapperCapture.start({
+    sessionId: 'sw', token: 't', sources: ['mic', 'system'], chunkSeconds: 2, silenceThreshold: 0.004, silenceWarnMs: 150,
+    onStatus: (m, d) => statuses.push({ m, ...d }),
+  });
+  const [micProc, sysProc] = env.processors;
+  env.feed(micProc, noise(4096, 0.01));
+  env.feed(sysProc, new Float32Array(4096)); // zeros only
+  await sleep(300);
+  const silent = statuses.filter((s) => s.code.endsWith('_silent'));
+  assert.deepEqual(silent.map((s) => s.code), ['system_silent']);
+  assert.equal(silent[0].level, 'warning');
+  assert.match(silent[0].m, /Системный звук пока не поступает.*Запись с микрофона продолжается/);
+  assert.equal(w.RecapperCapture.stats().system.heard, false);
+  assert.equal(w.RecapperCapture.stats().mic.heard, true);
+  await w.RecapperCapture.stop();
+});
+
+test('a hanging getDisplayMedia (no loopback permission) times out; the late stream is released', async () => {
+  const { env, extra } = fakeMediaEnv({ bridge: true, systemDelayMs: 400 });
+  const w = loadCapture({ ...extra, fetch: serverFetch() });
+  const t0 = Date.now();
+  const info = await w.RecapperCapture.start({ sessionId: 'h', token: 't', chunkSeconds: 2, sources: ['mic', 'system'], silenceThreshold: 0.004, systemTimeoutMs: 100 });
+  assert.ok(Date.now() - t0 < 350, 'did not wait for the hung request');
+  assert.deepEqual(Array.from(info.sources), ['mic']);
+  assert.match(info.warnings[0].message, /timeout/);
+  assert.deepEqual(env.bridgeCalls.slice(0, 2), ['enable', 'disable'], 'loopback disabled again after the timeout');
+  await sleep(500);
+  assert.ok(env.lateStream, 'the request eventually resolved');
+  assert.ok(env.lateStream.getTracks().every((t) => t.stopped), 'late stream stopped, not leaked');
+  await w.RecapperCapture.stop();
 });
