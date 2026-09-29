@@ -181,7 +181,7 @@ def test_detector_crash_is_reported_not_raised():
 
 def test_answerer_crash_becomes_failed_answer():
     class Boom:
-        def answer(self, item, segments):
+        def answer(self, item, segments, progress=None):
             raise RuntimeError("answer crash")
 
     s = LiveSession(Components(HeuristicDetector(), Boom(), HeuristicRecapper(), "offline"), min_chars=0)
@@ -263,3 +263,26 @@ def test_runtime_session_uses_settings(tmp_path):
     assert len(s.add_segments([Segment(text="Бот, посчитай бюджет наград")])) == 1
     s.finish(deadline=5)
     assert isinstance(s.c.assistant, Assistant)
+
+
+def test_stage_events_cancel_dismiss_retry_refine():
+    s = LiveSession(ai_components(FakeLLM()), min_chars=0)
+    cmd = s.add_segments([Segment(text=CMD)])[0]
+    s.finish_wait = None
+    deadline = time.time() + 5
+    while not any(e.type == "answer" for e in s.events()) and time.time() < deadline:
+        time.sleep(0.02)
+    stages = [e.data["stage"] for e in s.events() if e.type == "stage" and e.data["item_id"] == cmd.id]
+    assert stages[:2] == ["understood", "memory"] and "web" in stages
+    # Retry a finished answer.
+    s.request_answer(cmd.id)
+    # Refine: a follow-up answered with the previous answer as context.
+    child = s.refine(cmd.id, "А если бюджет 100 тысяч?")
+    assert child.parent_id == cmd.id and "Уточнение к задаче" in child.quote
+    # Cancel a false trigger: its answer disappears and a late answer is discarded.
+    s.set_item_status(cmd.id, "cancelled")
+    report = s.finish(deadline=5)
+    assert report.item(cmd.id).status == "cancelled" and report.answer_for(cmd.id) is None
+    assert report.answer_for(child.id) is not None
+    with pytest.raises(ValueError):
+        s.set_item_status(cmd.id, "weird")

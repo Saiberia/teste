@@ -30,7 +30,7 @@ from ..assist import ASSIST_ACTIONS, TEMPLATES
 from ..config import Settings
 from ..engine import LiveSession, Runtime, SessionClosed
 from ..knowledge import TEXT_SUFFIXES
-from ..models import Item, ItemKind, ItemOrigin, MeetingReport, Segment
+from ..models import ActionItem, Item, ItemKind, ItemOrigin, MeetingReport, Segment
 from ..prefs import PrefsStore, SettingsError, apply_prefs, public_values, schema, validate_update
 from ..providers import TracingLLM
 from ..render import report_to_docx, report_to_markdown
@@ -55,6 +55,34 @@ class LiveCreate(BaseModel):
     title: str = Field("Встреча", max_length=200)
     template: str | None = Field(None, max_length=40)
     auto_answer: str | None = Field(None, pattern="^(commands|all)$")
+    consent: bool = False
+
+
+class ItemStatus(BaseModel):
+    status: str = Field(pattern="^(active|cancelled|dismissed)$")
+
+
+class ActionItemIn(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+    owner: str = Field("", max_length=100)
+    due: str = Field("", max_length=100)
+    done: bool = False
+
+
+class RecapPatch(BaseModel):
+    summary: str | None = Field(None, max_length=20_000)
+    decisions: list[str] | None = Field(None, max_length=200)
+    action_items: list[ActionItemIn] | None = Field(None, max_length=200)
+
+
+class MeetingPatch(BaseModel):
+    title: str | None = Field(None, min_length=1, max_length=200)
+    reviewed: bool | None = None
+    recap: RecapPatch | None = None
+
+
+class Rebuild(BaseModel):
+    template: str = Field(max_length=40)
 
 
 class LiveSegments(BaseModel):
@@ -269,6 +297,7 @@ def create_app(
     @app.post("/api/live", dependencies=[Depends(auth)])
     def live_create(body: LiveCreate) -> dict:
         sess = _new_session(body.title, body.template, body.auto_answer)
+        sess.report.consent_noted = body.consent
         return {"id": sess.report.id, "mode": sess.report.mode, "template": sess.report.template}
 
     @app.post("/api/live/{sid}/segments", dependencies=[Depends(auth)])
@@ -321,6 +350,20 @@ def create_app(
     def live_answer_item(sid: str, item_id: str) -> dict:
         try:
             return _session(sid).request_answer(item_id).model_dump(mode="json")
+        except KeyError as exc:
+            raise HTTPException(404, "пункт не найден") from exc
+
+    @app.post("/api/live/{sid}/items/{item_id}/status", dependencies=[Depends(auth)])
+    def live_item_status(sid: str, item_id: str, body: ItemStatus) -> dict:
+        try:
+            return _session(sid).set_item_status(item_id, body.status).model_dump(mode="json")
+        except KeyError as exc:
+            raise HTTPException(404, "пункт не найден") from exc
+
+    @app.post("/api/live/{sid}/items/{item_id}/refine", dependencies=[Depends(auth)])
+    def live_refine(sid: str, item_id: str, body: Question) -> dict:
+        try:
+            return _session(sid).refine(item_id, body.question).model_dump(mode="json")
         except KeyError as exc:
             raise HTTPException(404, "пункт не найден") from exc
 
@@ -441,6 +484,49 @@ def create_app(
         if not store.delete(report_id, owner=OWNER):
             raise HTTPException(404, "не найдено")
         return {"deleted": report_id}
+
+    @app.patch("/api/meetings/{report_id}", dependencies=[Depends(auth)])
+    def patch_meeting(report_id: str, body: MeetingPatch) -> dict:
+        """Edit the report in place: title, "всё проверено", summary, decisions, action items checklist."""
+        report = _report(report_id)
+        if body.title is not None:
+            report.title = body.title
+        if body.reviewed is not None:
+            report.reviewed = body.reviewed
+        if body.recap is not None:
+            if body.recap.summary is not None:
+                report.recap.summary = body.recap.summary
+            if body.recap.decisions is not None:
+                report.recap.decisions = [d.strip() for d in body.recap.decisions if d.strip()]
+            if body.recap.action_items is not None:
+                report.recap.action_items = [ActionItem(**a.model_dump()) for a in body.recap.action_items]
+        store.save(report, owner=OWNER)
+        return report.model_dump(mode="json")
+
+    @app.post("/api/meetings/{report_id}/rebuild", dependencies=[Depends(auth)])
+    def rebuild(report_id: str, body: Rebuild) -> dict:
+        """Rebuild the summary with another report template (answers are kept)."""
+        if body.template not in TEMPLATES:
+            raise HTTPException(422, f"неизвестный шаблон: {body.template}")
+        report = _report(report_id)
+        if not report.segments:
+            raise HTTPException(409, "расшифровка не хранится — пересобрать нельзя")
+        components = runtime.components(report.title, OWNER, exclude_id=report.id, template=body.template)
+        report.recap = components.recapper.recap(report.segments)
+        report.template = body.template
+        report.reviewed = False
+        store.save(report, owner=OWNER)
+        return report.model_dump(mode="json")
+
+    @app.post("/api/meetings/{report_id}/items/{item_id}/status", dependencies=[Depends(auth)])
+    def stored_item_status(report_id: str, item_id: str, body: ItemStatus) -> dict:
+        report = _report(report_id)
+        item = report.item(item_id)
+        if item is None:
+            raise HTTPException(404, "пункт не найден")
+        item.status = body.status
+        store.save(report, owner=OWNER)
+        return item.model_dump(mode="json")
 
     @app.post("/api/meetings/{report_id}/speakers", dependencies=[Depends(auth)])
     def rename_speaker(report_id: str, body: SpeakerRename) -> dict:

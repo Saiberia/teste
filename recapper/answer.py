@@ -21,6 +21,11 @@ RECENT_SEGMENTS = 20
 WINDOW = 8
 
 MemorySearch = Callable[[str], list[MemoryHit]]
+Progress = Callable[..., None]  # progress(stage, **info): understood | memory | docs | web | writing
+
+
+def _noop(stage: str, **info: object) -> None:
+    return None
 
 
 def transcript_context(item: Item, segments: list[Segment]) -> str:
@@ -69,7 +74,7 @@ def memory_context(hits: list[MemoryHit]) -> tuple[str, list[Source]]:
 
 
 class Answerer(Protocol):
-    def answer(self, item: Item, segments: list[Segment]) -> Answer: ...
+    def answer(self, item: Item, segments: list[Segment], progress: Progress | None = None) -> Answer: ...
 
 
 class OfflineAnswerer:
@@ -79,7 +84,9 @@ class OfflineAnswerer:
         self.kb = kb or KnowledgeBase()
         self.memory = memory
 
-    def answer(self, item: Item, segments: list[Segment]) -> Answer:
+    def answer(self, item: Item, segments: list[Segment], progress: Progress | None = None) -> Answer:
+        progress = progress or _noop
+        progress("understood")
         query = f"{item.text} {item.quote}"
         body = ["ИИ не подключён, поэтому черновика нет. Ниже собран контекст для ответа."]
         sources: list[Source] = []
@@ -91,6 +98,7 @@ class OfflineAnswerer:
                 body.append(f"- _{chunk.doc}_: {snippet}")
                 sources.append(Source(title=chunk.doc, ref=f"doc:{chunk.doc}"))
         past = self.memory(query) if self.memory else []
+        progress("memory", count=len(past))
         if past:
             body.append("\n**Из прошлых встреч:**")
             for hit in past[:3]:
@@ -177,9 +185,14 @@ class LLMAnswerer:
         self.title = title
         self.memory = memory
 
-    def answer(self, item: Item, segments: list[Segment]) -> Answer:
+    def answer(self, item: Item, segments: list[Segment], progress: Progress | None = None) -> Answer:
+        progress = progress or _noop
+        progress("understood")
+        hits = self.memory(f"{item.text} {item.quote}") if self.memory else []
+        progress("memory", count=len({h.meeting_id for h in hits}))
+        past_text, past_sources = memory_context(hits)
         kb_text, kb_sources = knowledge_context(item, self.kb)
-        past_text, past_sources = memory_context(self.memory(f"{item.text} {item.quote}") if self.memory else [])
+        progress("docs", count=len(kb_sources))
         label = "Вопрос" if item.kind == ItemKind.QUESTION else "Задача"
         # Stable, shared parts first (transcript, docs) so prompt caching can reuse them across items.
         prompt = (
@@ -191,6 +204,7 @@ class LLMAnswerer:
             + (f"Дословно: «{item.quote}» — {item.speaker or 'участник'}\n" if item.quote else "")
             + language_instruction(self.language)
         )
+        progress("web" if self.web_search else "writing")
         try:
             result = self.llm.research(ANSWER_SYSTEM, prompt, self.effort, self.web_search)
         except LLMError as exc:

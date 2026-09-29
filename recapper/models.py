@@ -40,6 +40,8 @@ class Item(BaseModel):
     start: float | None = None
     origin: ItemOrigin = ItemOrigin.MEETING
     detector: str = ""  # command | llm | heuristic | user
+    status: str = "active"  # active | cancelled (false voice trigger) | dismissed (hidden suggestion)
+    parent_id: str | None = None  # a refinement ("Уточнить") of another item
 
     @property
     def is_command(self) -> bool:
@@ -72,6 +74,7 @@ class ActionItem(BaseModel):
     text: str
     owner: str = ""
     due: str = ""
+    done: bool = False
 
 
 class RecapSection(BaseModel):
@@ -91,6 +94,8 @@ class MeetingReport(BaseModel):
     title: str = "Встреча"
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds"))
     template: str = "general"
+    reviewed: bool = False  # the user marked the AI draft as checked
+    consent_noted: bool = False  # the user ticked "participants know about the recording"
     segments: list[Segment] = Field(default_factory=list)
     recap: Recap = Field(default_factory=Recap)
     items: list[Item] = Field(default_factory=list)

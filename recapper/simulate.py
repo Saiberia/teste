@@ -73,7 +73,7 @@ class SimulatedLLM:
                               for i in items]}
         if "decisions" in props and "summary" in props:  # recap
             recap = HeuristicRecapper().recap(parse_transcript(_between(prompt, "<transcript>", "</transcript>")))
-            data = recap.model_dump()
+            data = recap.model_dump(exclude={"action_items": {"__all__": {"done"}}})
             data["summary"] = "Симуляция: " + data["summary"]
             return data
         if "bullets" in props:  # live assist: behave like the offline assistant on the given transcript

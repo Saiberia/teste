@@ -279,12 +279,53 @@ class LiveSession:
         return item
 
     def request_answer(self, item_id: str) -> Item:
-        """Answer a suggestion the user clicked on."""
+        """Answer a suggestion the user clicked on, or retry a finished/failed answer."""
         with self._lock:
             self._require_open()
             item = self.report.item(item_id)
             if item is None:
                 raise KeyError(item_id)
+            fut = self._futures.get(item_id)
+            if fut is not None and fut.done():
+                del self._futures[item_id]  # retry
+            if item.status != "active":
+                item.status = "active"
+                self._emit("item", item.model_dump(mode="json"))
+        self._submit(item)
+        return item
+
+    def set_item_status(self, item_id: str, status: str) -> Item:
+        """cancel a false voice trigger, dismiss a suggestion, or restore either."""
+        if status not in ("active", "cancelled", "dismissed"):
+            raise ValueError(status)
+        with self._lock:
+            item = self.report.item(item_id)
+            if item is None:
+                raise KeyError(item_id)
+            item.status = status
+            if status != "active":
+                fut = self._futures.pop(item_id, None)
+                if fut is not None:
+                    fut.cancel()  # a running answer finishes but is discarded in _answer
+                self.report.answers = [a for a in self.report.answers if a.item_id != item_id]
+        self._emit("item", item.model_dump(mode="json"))
+        return item
+
+    def refine(self, item_id: str, text: str) -> Item:
+        """A follow-up to an answered item ("Уточнить"): answered with the previous answer as context."""
+        with self._lock:
+            self._require_open()
+            parent = self.report.item(item_id)
+            if parent is None:
+                raise KeyError(item_id)
+            prev = self.report.answer_for(item_id)
+            context = f"Уточнение к задаче «{parent.text}»."
+            if prev and prev.summary:
+                context += f" Предыдущий ответ: {prev.summary}"
+            item = Item(kind=ItemKind.QUESTION if text.strip().endswith("?") else ItemKind.TASK,
+                        text=text.strip(), quote=context, origin=ItemOrigin.USER, detector="user", parent_id=item_id)
+            self.report.items.append(item)
+        self._emit("item", item.model_dump(mode="json"))
         self._submit(item)
         return item
 
@@ -301,14 +342,18 @@ class LiveSession:
     def _answer(self, item: Item) -> None:
         with self._lock:
             segments = list(self.report.segments)
+
+        def progress(stage: str, **info: Any) -> None:
+            self._emit("stage", {"item_id": item.id, "stage": stage, **info})
+
         try:
-            answer = self.c.answerer.answer(item, segments)
+            answer = self.c.answerer.answer(item, segments, progress=progress)
         except Exception as exc:
             log.exception("answerer failed")
             answer = Answer(item_id=item.id, status=AnswerStatus.FAILED, summary="Ошибка", body=str(exc))
         with self._lock:
-            if self.state == "finished":
-                return  # arrived after the deadline; the report is already sealed
+            if self.state == "finished" or item.status != "active":
+                return  # sealed report, or the user cancelled the command meanwhile
             self.report.answers = [a for a in self.report.answers if a.item_id != item.id] + [answer]
         self._emit("answer", answer.model_dump(mode="json"))
 
@@ -339,7 +384,8 @@ class LiveSession:
             with self._lock:
                 answered = {a.item_id for a in self.report.answers}
                 for iid, fut in self._futures.items():
-                    if iid not in answered:
+                    item = self.report.item(iid)
+                    if iid not in answered and item is not None and item.status == "active":
                         fut.cancel()
                         self.report.answers.append(Answer(item_id=iid, status=AnswerStatus.FAILED,
                                                           summary="Не успело до завершения встречи",
