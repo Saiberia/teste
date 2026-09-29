@@ -15,7 +15,7 @@
   } catch (e) { token = params.get("token") || ""; }
   if (params.get("token")) {
     params.delete("token");
-    history.replaceState(null, "", location.pathname + (params.toString() ? "?" + params : ""));
+    history.replaceState(null, "", location.pathname + (params.toString() ? "?" + params : "") + location.hash);
   }
 
   const S = {

@@ -153,6 +153,7 @@ const ru = {
   // permissions page
   perm_title: "Доступ к микрофону для Recapper",
   perm_body: "Расширению нужен доступ к микрофону, чтобы слышать ваши голосовые команды («Ассистент, …») во время встречи. Разрешение выдаётся один раз для расширения; звук записывается только когда вы нажимаете «Начать запись».",
+  perm_persist: "Если браузер предложит варианты, выберите постоянное разрешение (например, «при каждом посещении»), а не «только в этот раз» — иначе после закрытия вкладки доступ пропадёт.",
   perm_button: "Разрешить доступ к микрофону",
   perm_granted: "Готово: доступ к микрофону разрешён. Эту вкладку можно закрыть.",
   perm_denied: "Доступ запрещён. Нажмите на значок замка или настроек сайта слева от адресной строки, разрешите «Микрофон» и нажмите кнопку ещё раз. Либо откройте chrome://settings/content/microphone и разрешите доступ для расширения Recapper.",
@@ -302,6 +303,7 @@ const en = {
   web_hint: "Compact panel of the Recapper web interface (attaches to the newest open meeting).",
   perm_title: "Microphone access for Recapper",
   perm_body: "The extension needs microphone access to hear your voice commands (“Assistant, …”) during a meeting. You grant it once for the extension; audio is only captured after you click “Start recording”.",
+  perm_persist: "If the browser offers options, choose the persistent one (e.g. “Allow while visiting the site”), not “Allow this time” — otherwise access is lost when this tab closes.",
   perm_button: "Allow microphone access",
   perm_granted: "Done: microphone access is allowed. You can close this tab.",
   perm_denied: "Access is blocked. Click the lock / site settings icon left of the address bar, allow “Microphone” and press the button again. Or open chrome://settings/content/microphone and allow the Recapper extension.",

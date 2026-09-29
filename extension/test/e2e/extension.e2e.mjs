@@ -39,6 +39,7 @@ if (SHOTS) mkdirSync(SHOTS, { recursive: true });
 const results = [];
 const children = [];
 let context = null;
+const contexts = [];
 const log = (...a) => console.log(...a);
 
 async function step(name, fn) {
@@ -132,6 +133,37 @@ function meetingServer() {
   return new Promise((res) => srv.listen(0, "127.0.0.1", () => res({ srv, url: `http://127.0.0.1:${srv.address().port}/meeting.html` })));
 }
 
+/** Launches Chromium with the unpacked extension; returns the context, its service worker and the id. */
+async function launch(name, extraArgs, { allowlist = true } = {}) {
+  const ctx = await chromium.launchPersistentContext(join(TMP, `profile-${name}`), {
+    headless: false,
+    ...(chromiumExecutable() ? { executablePath: chromiumExecutable() } : {}),
+    viewport: { width: 480, height: 1000 },
+    args: [
+      `--disable-extensions-except=${EXT}`,
+      `--load-extension=${EXT}`,
+      "--use-fake-device-for-media-stream", // a fake microphone (beeps)
+      // test-only: lifts tabCapture's "extension was invoked on this tab" (activeTab) check
+      ...(allowlist ? [`--allowlisted-extension-id=${unpackedExtensionId(EXT)}`] : []),
+      ...extraArgs,
+    ],
+  });
+  contexts.push(ctx);
+  const worker = ctx.serviceWorkers()[0] || (await ctx.waitForEvent("serviceworker", { timeout: 15000 }));
+  return { context: ctx, sw: worker, extId: new URL(worker.url()).host };
+}
+
+/** Opens the "meeting" tab (speech-like audio, started by a real click) and returns its tab id. */
+async function openMeeting(ctx, worker, url) {
+  const page = await ctx.newPage();
+  await page.goto(url);
+  await page.click("#play");
+  await page.waitForFunction(() => document.getElementById("state").textContent === "running");
+  const tabId = await worker.evaluate(async (u) => (await chrome.tabs.query({ url: u }))[0]?.id, url);
+  assert(Number.isInteger(tabId), "meeting tab id");
+  return { page, tabId };
+}
+
 // -------------------------------------------------------------------- run ---
 let meeting;
 const pageErrors = [];
@@ -147,35 +179,21 @@ try {
   log(`# fake-ASR server ${FAKE}, plain server ${PLAIN}, meeting page ${meeting.url}`);
 
   const expectedId = unpackedExtensionId(EXT);
-  context = await chromium.launchPersistentContext(join(TMP, "profile"), {
-    headless: false,
-    ...(chromiumExecutable() ? { executablePath: chromiumExecutable() } : {}),
-    viewport: { width: 480, height: 1000 },
-    args: [
-      `--disable-extensions-except=${EXT}`,
-      `--load-extension=${EXT}`,
-      "--use-fake-ui-for-media-stream",
-      "--use-fake-device-for-media-stream",
-      `--allowlisted-extension-id=${expectedId}`, // test-only: lifts the activeTab check of tabCapture
-    ],
-  });
-
   let sw;
   let extId;
   await step("extension loads: service worker is running, id matches the unpacked path", async () => {
-    sw = context.serviceWorkers()[0] || (await context.waitForEvent("serviceworker", { timeout: 15000 }));
-    extId = new URL(sw.url()).host;
+    ({ context, sw, extId } = await launch("main", [
+      // Accepts permission prompts through the real permission flow, without persisting them.
+      // (--use-fake-ui-for-media-stream is NOT used: its fake UI cannot resolve tab-capture
+      // stream ids → NotFoundError.)
+      "--auto-accept-camera-and-microphone-capture",
+    ]));
     assert(sw.url().endsWith("/background.js"), sw.url());
     assert(extId === expectedId, `extension id ${extId} != ${expectedId}`);
   });
 
   // The "meeting": a tab playing speech-like audio (started by a real click → user activation).
-  const meetingPage = await context.newPage();
-  await meetingPage.goto(meeting.url);
-  await meetingPage.click("#play");
-  await meetingPage.waitForFunction(() => document.getElementById("state").textContent === "running");
-  const meetingTabId = await sw.evaluate(async (url) => (await chrome.tabs.query({ url }))[0]?.id, meeting.url);
-  assert(Number.isInteger(meetingTabId), "meeting tab id");
+  const { tabId: meetingTabId } = await openMeeting(context, sw, meeting.url);
 
   const panel = await context.newPage();
   panel.on("pageerror", (e) => pageErrors.push(`pageerror: ${e.message}`));
@@ -228,6 +246,22 @@ try {
     assert(await panel.isVisible("#capture"), "capture controls shown");
     await panel.click("#detach");
     await panel.waitForSelector("#meeting-pick:not([hidden])");
+  });
+
+  await step("microphone permission: side panel → permissions.html → access granted, panel notified", async () => {
+    assert((await $text("#mic-state")) === "ещё не разрешён", `initial mic state: ${await $text("#mic-state")}`);
+    const checks = Number(await panel.getAttribute("body", "data-mic-checks"));
+    const [page] = await Promise.all([context.waitForEvent("page"), panel.click("#mic-grant")]);
+    await page.waitForSelector("body[data-ready='1']");
+    assert(page.url() === `chrome-extension://${extId}/permissions.html`, page.url());
+    assert((await page.innerText("h1")).includes("Доступ к микрофону"), "Russian permissions page");
+    await page.click("#grant");
+    await page.waitForSelector("#perm-result[data-state='granted']", { timeout: 10000 });
+    assert((await page.innerText("#perm-result")).includes("разрешён"), await page.innerText("#perm-result"));
+    // The page tells the side panel to re-read the permission. (The automation switch accepts the
+    // prompt without persisting it, so the persisted "разрешён" state is checked manually.)
+    await panel.waitForFunction((n) => Number(document.body.dataset.micChecks) > n, checks, { timeout: 5000 });
+    await page.close();
   });
 
   let sid;
@@ -313,7 +347,12 @@ try {
       return bar && parseFloat(bar.style.width) > 0;
     }, null, { timeout: 10000 });
     await waitUpload("system", sid);
-    await taskCard("Собеседники").first().waitFor({ timeout: 20000 });
+    // The server labels source=system speech as the other participants. (The fixed fake phrase is
+    // not turned into a second task card: the server dedupes near-identical voice commands.)
+    const live = await api(FAKE, "GET", `/api/live/${sid}`);
+    const theirs = live.report.segments.filter((x) => x.speaker === "Собеседники");
+    assert(theirs.length >= 1 && theirs[0].text.includes("бюджет"), JSON.stringify(live.report.segments.slice(-3)));
+    assert(live.report.segments.some((x) => x.speaker === "Я"), "mic segments labelled as me");
     await snap(panel, "03-tab-capture");
   });
 
@@ -374,6 +413,8 @@ try {
       return h && h.textContent.length > 0;
     }, null, { timeout: 15000 });
     assert((await $text("#assist-result h3")) === "Итог на текущий момент", await $text("#assist-result"));
+    const items = await panel.locator("#assist-result li").allInnerTexts();
+    assert(items.every((x) => x.trim() && x.trim() !== "null"), `no empty/null bullets: ${JSON.stringify(items)}`);
     await snap(panel, "04-live");
   });
 
@@ -406,7 +447,8 @@ try {
   await step("report link opens the meeting in the server web UI", async () => {
     const [page] = await Promise.all([context.waitForEvent("page"), panel.click("#report-link")]);
     await page.waitForLoadState();
-    await page.waitForFunction((id) => document.body.innerText.includes("Игра Самоката"), sid, { timeout: 15000 });
+    await page.waitForFunction(() => document.body.innerText.includes("Игра Самоката"), null, { timeout: 15000 });
+    assert(page.url().endsWith(`#/meeting/${sid}`), page.url());
     const url = page.url();
     assert(!url.includes(TOKEN), `token removed from the address bar: ${url}`);
     await page.close();
@@ -419,6 +461,7 @@ try {
     await panel.click("#save-settings");
     await panel.waitForFunction(() => document.getElementById("test-conn").textContent === "Test connection", null, { timeout: 15000 });
     assert(await panel.isVisible("#asr-warning"), "ASR-off warning");
+    assert((await $text("#target-tab")).startsWith("Tab: "), `re-translated: ${await $text("#target-tab")}`);
     await panel.click("#settings-toggle");
     await panel.fill("#new-title", "No ASR");
     await panel.click("#create-session");
@@ -454,19 +497,70 @@ try {
     await api(FAKE, "POST", `/api/live/${other}/finish`);
     await panel.waitForSelector("#done-card:not([hidden])", { timeout: 30000 });
     await waitStopped();
+    await waitFor(async () => ["idle", "stopped"].includes((await captureStatus())?.status?.state), { what: "capture stopped" });
+    assert(await panel.isHidden("#capture"), "capture controls hidden once stopped");
     const href = await panel.getAttribute("#report-link", "href");
     assert(href.endsWith(`#/meeting/${other}`), href);
   });
 
-  await step("permissions page grants the microphone for the extension", async () => {
-    const page = await context.newPage();
-    await page.goto(`chrome-extension://${extId}/permissions.html`);
-    await page.waitForSelector("body[data-ready='1']");
-    if (await page.isVisible("#grant")) await page.click("#grant");
-    await page.waitForSelector("#perm-result[data-state='granted']", { timeout: 10000 });
-    assert((await page.innerText("#perm-result")).includes("разрешён"), await page.innerText("#perm-result"));
-    await page.close();
-    await panel.waitForFunction(() => document.getElementById("mic-state").textContent === "разрешён", null, { timeout: 5000 });
+  /** Another browser profile: server preconfigured, side panel open on a new meeting, both sources ticked. */
+  async function panelWithMeeting(browser, title) {
+    const { tabId } = await openMeeting(browser.context, browser.sw, meeting.url);
+    await browser.sw.evaluate((cfg) => chrome.storage.local.set(cfg), { serverUrl: FAKE, token: TOKEN });
+    const p = await browser.context.newPage();
+    p.on("pageerror", (e) => pageErrors.push(`pageerror (${title}): ${e.message}`));
+    await p.goto(`chrome-extension://${browser.extId}/sidepanel.html?tab=${tabId}`);
+    await p.waitForSelector("body[data-ready='1']");
+    await p.waitForSelector("#meeting-pick:not([hidden])");
+    await p.fill("#new-title", title);
+    await p.click("#create-session");
+    await p.waitForFunction((x) => document.getElementById("meeting-title").textContent === x, title);
+    const id = (await api(FAKE, "GET", "/api/live")).find((x) => x.title === title).id;
+    await p.check("#consent");
+    await p.check("#src-tab");
+    await p.check("#src-mic");
+    return { p, id };
+  }
+
+  await step("mic permission denied: capture continues with tab audio only; permissions page explains", async () => {
+    const denied = await launch("denied", ["--deny-permission-prompts"]);
+    const { p, id: noMic } = await panelWithMeeting(denied, "Без микрофона");
+    await p.click("#start-capture");
+    await p.waitForSelector("#capture-status[data-state='running']", { timeout: 15000 });
+    const sources = await p.evaluate(() => JSON.parse(document.getElementById("capture-status").dataset.sources));
+    assert(sources.system?.state === "on" && sources.mic?.state === "failed", JSON.stringify(sources));
+    await p.waitForSelector("#capture-warnings li[data-code='mic_permission']");
+    const warnings = await p.innerText("#capture-warnings");
+    assert(warnings.includes("Нет разрешения на микрофон") && warnings.includes("только со звуком вкладки"), warnings);
+    await waitUpload("system", noMic);
+    await p.click("#stop-capture");
+    await p.waitForFunction(() => ["stopped", "idle"].includes(document.getElementById("capture-status").dataset.state), null, { timeout: 30000 });
+    await snap(p, "07-mic-denied");
+    const perm = await denied.context.newPage();
+    await perm.goto(`chrome-extension://${denied.extId}/permissions.html`);
+    await perm.waitForSelector("body[data-ready='1']");
+    await perm.click("#grant");
+    await perm.waitForSelector("#perm-result[data-state='denied']", { timeout: 10000 });
+    assert((await perm.innerText("#perm-result")).includes("chrome://settings/content/microphone"), "explains how to unblock");
+    await denied.context.close();
+  });
+
+  await step("tab audio refused (icon not clicked on the tab): continues with the mic only and says what to do", async () => {
+    // No --allowlisted-extension-id: this is what happens when the user opens the panel without
+    // clicking the Recapper icon on the meeting tab.
+    const plain = await launch("not-invoked", ["--auto-accept-camera-and-microphone-capture"], { allowlist: false });
+    const { p, id: micOnly } = await panelWithMeeting(plain, "Только микрофон");
+    await p.click("#start-capture");
+    await p.waitForSelector("#capture-status[data-state='running']", { timeout: 15000 });
+    const sources = await p.evaluate(() => JSON.parse(document.getElementById("capture-status").dataset.sources));
+    assert(sources.mic?.state === "on" && !sources.system, JSON.stringify(sources));
+    const warnings = await p.innerText("#capture-warnings");
+    assert(warnings.includes("нажмите значок Recapper") && warnings.includes("только с микрофоном"), warnings);
+    await waitUpload("mic", micOnly);
+    await p.click("#stop-capture");
+    await p.waitForFunction(() => ["stopped", "idle"].includes(document.getElementById("capture-status").dataset.state), null, { timeout: 30000 });
+    await snap(p, "08-tab-not-invoked");
+    await plain.context.close();
   });
 
   await step("no uncaught errors in the side panel", async () => {
@@ -478,7 +572,7 @@ try {
     log(`not ok - setup\n  ${String(e?.stack || e)}`);
   }
 } finally {
-  if (context) await context.close().catch(() => {});
+  for (const c of contexts) await c.close().catch(() => {});
   meeting?.srv.close();
   for (const c of children) c.kill("SIGTERM");
   if (!process.env.E2E_KEEP) rmSync(TMP, { recursive: true, force: true });

@@ -43,7 +43,6 @@ const UI = {
   levels: {},
   targetTab: null,
   mic: "unknown",
-  collapsed: new Set(),
   renderedKey: "",
 };
 const t = (key, vars) => UI.t(key, vars);
@@ -215,6 +214,7 @@ async function onTestConnection() {
 
 // --------------------------------------------------------------- mic permission ---
 async function refreshMicPermission() {
+  document.body.dataset.micChecks = String(Number(document.body.dataset.micChecks || 0) + 1);
   try {
     const status = await navigator.permissions.query({ name: "microphone" });
     UI.mic = status.state;
@@ -227,6 +227,7 @@ async function refreshMicPermission() {
 
 function renderMic() {
   $("mic-state").textContent = t(`mic_${["granted", "prompt", "denied"].includes(UI.mic) ? UI.mic : "unknown"}`);
+  $("mic-state").dataset.state = UI.mic;
   $("mic-grant").hidden = UI.mic === "granted";
 }
 
@@ -254,9 +255,17 @@ async function refreshTargetTab(tabId) {
     } catch { /* ignore */ }
   }
   UI.targetTitle = title;
+  renderTargetTab();
+}
+
+function renderTargetTab() {
+  const title = UI.targetTitle;
   $("target-tab").textContent = UI.targetTab ? t("target_tab", { title: title || `#${UI.targetTab.id}` }) : t("target_tab_unknown");
   $("new-title").placeholder = title || t("default_title");
 }
+
+/** List entries from the server/AI, minus empty ones (a model may return null items). */
+const cleanList = (list) => (Array.isArray(list) ? list : []).filter((x) => x !== null && x !== undefined && String(x).trim());
 
 // -------------------------------------------------------------------- sessions ---
 async function refreshSessions() {
@@ -318,7 +327,6 @@ async function attach(session) {
   UI.ev = initialState(session.id);
   UI.lost = false;
   UI.finishing = false;
-  UI.collapsed.clear();
   $("consent").checked = false;
   hideBanner();
   await chrome.storage.local.set({ attached: UI.session });
@@ -548,11 +556,10 @@ function warningText(w) {
 
 function renderCapture() {
   const s = UI.session;
-  const show = Boolean(s && !s.finished && !UI.lost);
-  $("capture").hidden = !show;
-  if (!show && !isCapturing()) return;
-  const state = UI.capture?.state || "idle";
   const running = isCapturing();
+  // Hidden once the meeting is over, unless a capture is still active (so it can be stopped).
+  $("capture").hidden = !(s && !s.finished && !UI.lost) && !running;
+  const state = UI.capture?.state || "idle";
   $("start-capture").hidden = running;
   $("stop-capture").hidden = !running;
   $("start-capture").disabled = UI.captureBusy;
@@ -612,7 +619,7 @@ function renderAnswer(a, id) {
   }, t("copy"));
   box.append(h("div", { class: "answer-head" },
     chip(t(statusKey), `st-${a.status}`),
-    a.confidence ? h("span", { class: "muted" }, `${t("confidence")}: ${t(`conf_${a.confidence}`)}`) : null,
+    a.confidence ? h("span", { class: "muted" }, `${t("confidence")}: ${["high", "medium", "low"].includes(a.confidence) ? t(`conf_${a.confidence}`) : a.confidence}`) : null,
     copy));
   if (a.summary) box.append(h("p", { class: "summary" }, a.summary));
   if (a.body) {
@@ -670,7 +677,7 @@ function renderResults() {
   $("tasks").hidden = !show;
   $("heard").hidden = !show;
   $("assist").hidden = !show || Boolean(s?.finished) || UI.lost;
-  $("askbar").hidden = !show || Boolean(s?.finished) || UI.lost;
+  $("askbar").hidden = !show || Boolean(s?.finished) || UI.lost || !$("view-web").hidden;
   $("finish").hidden = !show || UI.lost;
   if (!show) return;
   const view = selectView(UI.ev);
@@ -715,10 +722,11 @@ function renderAssistResult(view) {
   }
   const a = view.assist;
   if (!a) { box.replaceChildren(); return; }
+  const bullets = cleanList(a.bullets);
   box.replaceChildren(
     h("h3", {}, a.title || a.action || ""),
     a.text ? h("p", {}, a.text) : null,
-    a.bullets?.length ? h("ul", {}, a.bullets.map((b) => h("li", {}, String(b)))) : null);
+    bullets.length ? h("ul", {}, bullets.map((b) => h("li", {}, String(b)))) : null);
 }
 
 function renderRecap(recap) {
@@ -727,12 +735,15 @@ function renderRecap(recap) {
   const parts = [h("h3", {}, t("recap"))];
   if (recap.summary) parts.push(h("p", { class: "recap-summary" }, recap.summary));
   for (const sec of recap.sections || []) {
-    if (!sec.bullets?.length) continue;
-    parts.push(h("h4", {}, sec.title), h("ul", {}, sec.bullets.map((b) => h("li", {}, String(b)))));
+    const bullets = cleanList(sec?.bullets);
+    if (!bullets.length) continue;
+    parts.push(h("h4", {}, sec.title), h("ul", {}, bullets.map((b) => h("li", {}, String(b)))));
   }
-  if (recap.decisions?.length) parts.push(h("h4", {}, t("decisions")), h("ul", {}, recap.decisions.map((d) => h("li", {}, String(d)))));
-  if (recap.action_items?.length) {
-    parts.push(h("h4", {}, t("action_items")), h("ul", {}, recap.action_items.map((a) =>
+  const decisions = cleanList(recap.decisions);
+  if (decisions.length) parts.push(h("h4", {}, t("decisions")), h("ul", {}, decisions.map((d) => h("li", {}, String(d)))));
+  const actions = (recap.action_items || []).filter((a) => a?.text);
+  if (actions.length) {
+    parts.push(h("h4", {}, t("action_items")), h("ul", {}, actions.map((a) =>
       h("li", {}, [a.text, a.owner, a.due].filter(Boolean).join(" — ")))));
   }
   box.replaceChildren(...parts);
@@ -770,6 +781,7 @@ function renderMeeting() {
 function renderAll() {
   renderConn();
   renderMeeting();
+  renderTargetTab();
   renderCapture();
   renderResults();
   renderMic();
@@ -839,6 +851,29 @@ async function onFinish() {
   }
 }
 
+/**
+ * Opens the report link (<server>/?token=…#/meeting/<id>) in a new tab. The server web UI removes
+ * ?token= from the address bar with history.replaceState and currently drops the #/meeting/<id>
+ * hash with it, landing on the live view; so once the page has loaded we re-apply the hash
+ * (a same-document navigation → the UI routes to the report). With a fixed UI this is a no-op.
+ */
+async function openReport(event) {
+  if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; // let the browser handle it
+  event.preventDefault();
+  const id = UI.session?.reportId || UI.ev.doneId;
+  if (!id) return;
+  const url = reportUrl(UI.config.serverUrl, UI.config.token, id);
+  const hashUrl = `${UI.config.serverUrl}/#/meeting/${encodeURIComponent(id)}`;
+  const tab = await chrome.tabs.create({ url });
+  const onUpdated = (tabId, info) => {
+    if (tabId !== tab.id || info.status !== "complete") return;
+    chrome.tabs.onUpdated.removeListener(onUpdated);
+    chrome.tabs.update(tab.id, { url: hashUrl }).catch(() => {});
+  };
+  chrome.tabs.onUpdated.addListener(onUpdated);
+  setTimeout(() => chrome.tabs.onUpdated.removeListener(onUpdated), 30000);
+}
+
 function switchTab(name) {
   const web = name === "web";
   $("tab-assistant").setAttribute("aria-selected", String(!web));
@@ -883,6 +918,7 @@ function bind() {
   $("finish-cancel").addEventListener("click", () => { $("finish-confirm").hidden = true; });
   $("finish-yes").addEventListener("click", onFinish);
   $("new-after-done").addEventListener("click", onDetach);
+  $("report-link").addEventListener("click", openReport);
   $("banner-close").addEventListener("click", hideBanner);
   $("tab-assistant").addEventListener("click", () => switchTab("assistant"));
   $("tab-web").addEventListener("click", () => switchTab("web"));
@@ -922,6 +958,10 @@ async function init() {
     UI.ev = initialState(stored.attached.id);
     renderAll();
     if (!UI.session.finished && UI.api) startPolling();
+    else if (UI.session.finished && ok) {
+      // The server keeps a finished session for a while: show its items again, if still there.
+      try { UI.ev = reduceEvents(UI.ev, await UI.api.events(UI.session.id, 0)); } catch { /* expired: done card only */ }
+    }
   } else if (ok) {
     await refreshSessions();
   }
