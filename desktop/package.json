@@ -1,0 +1,96 @@
+{
+  "name": "recapper-desktop",
+  "productName": "Recapper",
+  "version": "0.1.0",
+  "description": "Recapper — ассистент на созвонах: захват микрофона и системного звука, живые итоги и ответы",
+  "author": "Recapper",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test \"test/unit/*.test.js\"",
+    "test:e2e": "node --test --test-concurrency=1 --test-timeout=240000 \"test/e2e/*.test.js\"",
+    "build:backend": "python3 ../packaging/build_server.py",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "dist:dir": "electron-builder --dir"
+  },
+  "dependencies": {
+    "electron-audio-loopback": "^1.0.6"
+  },
+  "devDependencies": {
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
+    "playwright": "^1.63.0"
+  },
+  "build": {
+    "appId": "ai.recapper.desktop",
+    "productName": "Recapper",
+    "copyright": "Copyright © 2026 Recapper",
+    "directories": {
+      "output": "dist",
+      "buildResources": "resources"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/recapper-server",
+        "to": "backend",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "asar": true,
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "resources/entitlements.mac.plist",
+      "entitlementsInherit": "resources/entitlements.mac.plist",
+      "minimumSystemVersion": "12.3",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Recapper слушает микрофон во время созвона, чтобы расшифровать вашу речь и голосовые команды ассистенту.",
+        "NSAudioCaptureUsageDescription": "Recapper записывает системный звук (голоса других участников созвона), чтобы составлять живые итоги встречи.",
+        "NSScreenCaptureUsageDescription": "Recapper использует разрешение «Запись экрана и системного звука» только для захвата звука созвона; изображение экрана не записывается.",
+        "LSMultipleInstancesProhibited": true
+      }
+    },
+    "dmg": {
+      "title": "Recapper ${version}"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Recapper"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Office"
+    }
+  }
+}

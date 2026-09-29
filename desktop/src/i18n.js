@@ -1,0 +1,106 @@
+'use strict';
+// Strings for native UI (menus, tray, dialogs). The web UI translates itself.
+
+const STRINGS = {
+  ru: {
+    appName: 'Recapper',
+    panelTitle: 'Recapper — панель',
+    menuApp: 'Recapper',
+    menuAbout: 'О программе Recapper',
+    menuHide: 'Скрыть Recapper',
+    menuHideOthers: 'Скрыть остальные',
+    menuShowAll: 'Показать все',
+    menuQuit: 'Выйти из Recapper',
+    menuFile: 'Файл',
+    menuClose: 'Закрыть окно',
+    menuEdit: 'Правка',
+    menuUndo: 'Отменить',
+    menuRedo: 'Повторить',
+    menuCut: 'Вырезать',
+    menuCopy: 'Копировать',
+    menuPaste: 'Вставить',
+    menuSelectAll: 'Выбрать всё',
+    menuView: 'Вид',
+    menuShowPanel: 'Показать панель',
+    menuHidePanel: 'Скрыть панель',
+    menuShowMain: 'Главное окно',
+    menuReload: 'Перезагрузить',
+    menuDevTools: 'Инструменты разработчика',
+    menuZoomIn: 'Увеличить',
+    menuZoomOut: 'Уменьшить',
+    menuZoomReset: 'Реальный размер',
+    menuWindow: 'Окно',
+    menuMinimize: 'Свернуть',
+    menuHelp: 'Справка',
+    menuOpenLogs: 'Открыть папку журналов',
+    menuRestartBackend: 'Перезапустить движок',
+    trayTooltip: 'Recapper — ассистент на созвонах',
+    trayQuit: 'Выйти',
+    errorTitle: 'Recapper: движок не запустился',
+    crashTitle: 'Движок Recapper остановился',
+    crashMessage: 'Фоновый движок неожиданно завершился. Перезапустить его? Текущая запись прервётся.',
+    crashRestart: 'Перезапустить',
+    crashQuit: 'Выйти',
+    hotkeyBusy: 'Сочетание {accel} уже занято другой программой',
+    hotkeyInvalid: 'Некорректное сочетание клавиш: {error}',
+    micDeniedTitle: 'Нет доступа к микрофону',
+    micDeniedMessage: 'Разрешите Recapper доступ к микрофону: Системные настройки → Конфиденциальность и безопасность → Микрофон.',
+  },
+  en: {
+    appName: 'Recapper',
+    panelTitle: 'Recapper — panel',
+    menuApp: 'Recapper',
+    menuAbout: 'About Recapper',
+    menuHide: 'Hide Recapper',
+    menuHideOthers: 'Hide Others',
+    menuShowAll: 'Show All',
+    menuQuit: 'Quit Recapper',
+    menuFile: 'File',
+    menuClose: 'Close Window',
+    menuEdit: 'Edit',
+    menuUndo: 'Undo',
+    menuRedo: 'Redo',
+    menuCut: 'Cut',
+    menuCopy: 'Copy',
+    menuPaste: 'Paste',
+    menuSelectAll: 'Select All',
+    menuView: 'View',
+    menuShowPanel: 'Show panel',
+    menuHidePanel: 'Hide panel',
+    menuShowMain: 'Main window',
+    menuReload: 'Reload',
+    menuDevTools: 'Developer Tools',
+    menuZoomIn: 'Zoom In',
+    menuZoomOut: 'Zoom Out',
+    menuZoomReset: 'Actual Size',
+    menuWindow: 'Window',
+    menuMinimize: 'Minimize',
+    menuHelp: 'Help',
+    menuOpenLogs: 'Open logs folder',
+    menuRestartBackend: 'Restart engine',
+    trayTooltip: 'Recapper — meeting assistant',
+    trayQuit: 'Quit',
+    errorTitle: 'Recapper: the engine failed to start',
+    crashTitle: 'The Recapper engine stopped',
+    crashMessage: 'The background engine exited unexpectedly. Restart it? The current recording will be interrupted.',
+    crashRestart: 'Restart',
+    crashQuit: 'Quit',
+    hotkeyBusy: 'The shortcut {accel} is already used by another application',
+    hotkeyInvalid: 'Invalid shortcut: {error}',
+    micDeniedTitle: 'No microphone access',
+    micDeniedMessage: 'Allow Recapper to use the microphone: System Settings → Privacy & Security → Microphone.',
+  },
+};
+
+function normalizeLang(lang) {
+  return Object.prototype.hasOwnProperty.call(STRINGS, lang) ? lang : 'ru';
+}
+
+/** Translates `key` into `lang` (ru fallback), substituting {placeholders}. */
+function t(lang, key, params = {}) {
+  const dict = STRINGS[normalizeLang(lang)];
+  const s = dict[key] ?? STRINGS.ru[key] ?? key;
+  return s.replace(/\{(\w+)\}/g, (m, k) => (k in params ? String(params[k]) : m));
+}
+
+module.exports = { STRINGS, t, normalizeLang };
