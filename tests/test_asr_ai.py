@@ -159,3 +159,36 @@ def test_repeated_context_line_is_cut():
     out = _drop_repeats(new, ctx)
     assert [s.text for s in out] == ["поменены пароли", "М-м. Я на YouTube сейчас тебе доступ сброшу"]
     assert _drop_repeats(new[1:], ctx)[0].text == new[1].text  # unrelated lines stay intact
+
+
+def test_fragment_of_previous_line_is_dropped():
+    from recapper.asr import _drop_repeats
+    from recapper.models import Segment
+
+    ctx = [("Собеседник 2", "Ну, смотрите, Артём, вчера я, как говорила, я работала с видеосервисами. Единственное что")]
+    new = [Segment(speaker="Собеседник 2", text="вчера я, как говорила, я работала."),
+           Segment(speaker="Собеседник 2", text="Но, смотрите, Артём, вчера"),
+           Segment(speaker="Собеседник 1", text="Артём, не пускает.")]
+    assert [s.text for s in _drop_repeats(new, ctx)] == ["Артём, не пускает."]
+
+
+def test_noise_and_phantom_phrases_on_the_mic_are_dropped(tmp_path):
+    from recapper.asr import is_echo, voiced_seconds
+
+    quiet = np.random.default_rng(0).normal(0, 0.004, 16000 * 5).astype(np.float32)  # room noise
+    assert voiced_seconds(quiet) < 0.5
+    t = make(lambda r: (_ for _ in ()).throw(AssertionError("noise must not reach the model")))
+    path = tmp_path / "noise.wav"
+    import wave
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+        w.writeframes((quiet * 32767).astype("<i2").tobytes())
+    assert t.transcribe(path) == []
+    # a short burst of sound + a typical invented phrase -> dropped
+    burst = write_wav(tmp_path / "b.wav", seconds=1.0)
+    assert make(lambda r: chat_reply("Абонент временно недоступен.")).transcribe(burst) == []
+    assert make(lambda r: chat_reply("Здравствуйте.")).transcribe(burst) == []
+    assert [s.text for s in make(lambda r: chat_reply("Посчитай конверсию в Купер")).transcribe(burst)] == ["Посчитай конверсию в Купер"]
+    # the mic heard the speakers
+    assert is_echo("вчера я работала с видеосервисами", ["Ну смотрите Артём, вчера я работала с видеосервисами. Единственное"])
+    assert not is_echo("Ассистент, посчитай конверсию", ["вчера я работала с видеосервисами"])

@@ -120,7 +120,8 @@ class LLMTranscriber:
         where = f" на {lang} языке" if lang else ""
         return ("Сделай дословную расшифровку этой аудиозаписи" + where + ". Верни ТОЛЬКО произнесённый текст, "
                 "с пунктуацией, без пояснений, заголовков, таймкодов и кавычек. Ничего не придумывай и не дополняй. "
-                "Если речи нет или она неразборчива, верни пустой ответ.")
+                "Если речи нет или она неразборчива, верни пустой ответ. Не пиши приветствий, фраз автоответчика "
+                "или субтитров, которых нет в записи.")
 
     def _chat(self, wav: bytes, prompt: str) -> str:
         import base64
@@ -192,8 +193,9 @@ class LLMTranscriber:
         import numpy as np
 
         duration = len(audio) / 16000
-        # Silence: the model would only invent words.
-        if duration < 0.3 or float(np.sqrt(np.mean(audio ** 2))) < 0.002:
+        # Silence or background noise: the model would only invent words ("Здравствуйте", "Абонент недоступен").
+        voiced = voiced_seconds(audio)
+        if duration < 0.3 or voiced < 0.5:
             return []
         wav = encode_wav(audio)
         errors = []
@@ -214,7 +216,7 @@ class LLMTranscriber:
                 self._modes.remove(mode)
                 self._modes.insert(0, mode)
             text = _clean_transcript(text)
-            if not text:
+            if not text or (voiced < 3.0 and _is_phantom(text)):
                 return []
             if diarize and mode == "chat":
                 return _drop_repeats(_split_speakers(text, duration), context)
@@ -261,6 +263,29 @@ def _split_speakers(text: str, duration: float) -> list[Segment]:
     return out
 
 
+_PHANTOMS = ("здравствуйте", "добрый день", "доброе утро", "добрый вечер", "алло", "абонент временно недоступен",
+             "абонент недоступен", "спасибо за просмотр", "спасибо за внимание", "продолжение следует",
+             "субтитры", "редактор субтитров", "подписывайтесь", "до свидания", "спасибо", "угу", "ага", "да", "нет")
+
+
+def _is_phantom(text: str) -> bool:
+    """Typical words a speech model invents on noise; only trusted when little speech was heard."""
+    norm = " ".join(_words(text))
+    return any(norm == p or norm.startswith(p + " ") and len(norm) <= len(p) + 12 for p in _PHANTOMS)
+
+
+def voiced_seconds(audio, rate: int = 16000, frame: float = 0.03, threshold: float = 0.012) -> float:
+    """Seconds of 30 ms frames loud enough to be speech (a simple energy VAD)."""
+    import numpy as np
+
+    n = int(rate * frame)
+    if len(audio) < n:
+        return 0.0
+    frames = audio[: len(audio) // n * n].reshape(-1, n)
+    rms = np.sqrt(np.mean(frames ** 2, axis=1))
+    return float((rms > threshold).sum() * frame)
+
+
 def _words(text: str) -> list[str]:
     return re.findall(r"\w+", text.lower().replace("ё", "е"))
 
@@ -274,6 +299,8 @@ def _drop_repeats(segments: list[Segment], context: list[tuple[str, str]]) -> li
     for seg in segments:
         words = seg.text.split()
         norm = _words(seg.text)
+        if norm and any(_mostly_inside(norm, prev) for prev in recent):
+            continue  # a piece of a line that is already written
         cut = 0
         for prev in recent:
             if len(prev) < 3 or not norm:
@@ -299,6 +326,22 @@ def _drop_repeats(segments: list[Segment], context: list[tuple[str, str]]) -> li
             out.append(seg.model_copy(update={"text": text}))
         recent.append(_words(seg.text))
     return out
+
+
+def is_echo(text: str, others: list[str]) -> bool:
+    """My microphone picked up the speakers: the line repeats what the others said."""
+    words = _words(text)
+    return bool(words) and any(_mostly_inside(words, _words(o)) or _words(o) == words for o in others)
+
+
+def _mostly_inside(words: list[str], prev: list[str]) -> bool:
+    import difflib
+
+    if len(prev) < 3 or len(words) > len(prev) + 2:
+        return False
+    m = difflib.SequenceMatcher(None, prev, words, autojunk=False)
+    matched = sum(b.size for b in m.get_matching_blocks())
+    return matched >= 0.7 * len(words) and len(words) - matched <= 1  # nothing new in it
 
 
 def encode_wav(audio, sampling_rate: int = 16000) -> bytes:

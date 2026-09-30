@@ -25,7 +25,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import __version__
 from ..answer import knowledge_context, memory_context
-from ..asr import ASRError, LLMTranscriber, Transcriber, get_transcriber
+from ..asr import ASRError, LLMTranscriber, is_echo, Transcriber, get_transcriber
 from ..assist import ASSIST_ACTIONS, TEMPLATES
 from ..config import Settings
 from ..engine import LiveSession, Runtime, SessionClosed
@@ -387,6 +387,9 @@ def create_app(
             raise HTTPException(422, str(exc)) from exc
         if raw:
             sess.note_audio_clock(arrived, max(offset, 0.0), max((x.end or 0.0) for x in raw))
+        if source == "mic" and raw and isinstance(transcriber, LLMTranscriber):
+            recent_sys = [x.text for x in sess.report.segments[-15:] if x.source == "system"]
+            raw = [x for x in raw if not is_echo(x.text, recent_sys)]
         if source == "system" and sess.speaker_events:  # real names from the meeting page (Google Meet captions)
             raw = [seg.model_copy(update={"speaker": sess.speaker_at((seg.start or 0.0) + max(offset, 0.0),
                                                                      (seg.end or 0.0) + max(offset, 0.0)) or seg.speaker})

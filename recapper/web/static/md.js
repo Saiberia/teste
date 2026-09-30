@@ -12,6 +12,7 @@
       .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!?:;]|$)/g, "$1<em>$2</em>")
       .replace(/\[([^\]]+)\]\((?:&lt;)?(https?:\/\/[^\s)]+?)(?:&gt;)?\)/g,
         (m, text, url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`)
+      .replace(/\*\*/g, "")
       .replace(/\[(doc|meeting):([^\]]+)\]/g, '<span class="ref">$1:$2</span>');
   }
   function render(md) {
@@ -40,7 +41,7 @@
       let m;
       if ((m = /^(#{1,4})\s+(.*)$/.exec(line))) { closeList(); const lvl = Math.min(m[1].length + 2, 6); out.push(`<h${lvl}>${inline(m[2])}</h${lvl}>`); continue; }
       if ((m = /^\s*[-*•]\s+(.*)$/.exec(line))) { if (list !== "ul") { closeList(); out.push("<ul>"); list = "ul"; } out.push(`<li>${inline(m[1])}</li>`); continue; }
-      if ((m = /^\s*\d+[.)]\s+(.*)$/.exec(line))) { if (list !== "ol") { closeList(); out.push("<ol>"); list = "ol"; } out.push(`<li>${inline(m[1])}</li>`); continue; }
+      if ((m = /^\s*(\d+)[.)]\s+(.*)$/.exec(line))) { if (list !== "ol") { closeList(); out.push(m[1] === "1" ? "<ol>" : `<ol start="${m[1]}">`); list = "ol"; } out.push(`<li>${inline(m[2])}</li>`); continue; }
       if ((m = /^&gt;\s?(.*)$/.exec(line))) { closeList(); out.push(`<blockquote>${inline(m[1])}</blockquote>`); continue; }
       closeList();
       if (line.trim()) out.push(`<p>${inline(line)}</p>`);

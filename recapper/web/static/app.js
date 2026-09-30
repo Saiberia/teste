@@ -256,7 +256,7 @@
     if (ans.status === "draft") chips.append(el("span", { class: "chip conf-" + ans.confidence }, t("confidence") + ": " + t("conf_" + ans.confidence)));
     if (ans.warnings && ans.warnings.length) chips.append(el("span", { class: "chip warn", title: ans.warnings.join("\n") }, icon("warn"), t("ai_check_warn") + ": " + ans.warnings.length));
     card.append(chips);
-    if (ans.summary) card.append(el("p", { class: "summary" }, ans.summary));
+    if (ans.summary) card.append(el("div", { class: "summary md", html: MD.render(ans.summary) }));
     if (ans.body && !opts.compact) card.append(el("div", { class: "md", html: MD.render(ans.body) }));
     else if (ans.body && opts.compact) card.append(el("details", {}, el("summary", {}, t("open")), el("div", { class: "md", html: MD.render(ans.body) })));
     if (ans.assumptions && ans.assumptions.length) card.append(el("details", {}, el("summary", {}, t("assumptions") + " (" + ans.assumptions.length + ")"), el("ul", {}, ans.assumptions.map((a) => el("li", {}, a)))));
