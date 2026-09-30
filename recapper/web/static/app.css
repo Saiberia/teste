@@ -64,6 +64,8 @@ p { margin: 6px 0; }
 .muted { color: var(--muted); }
 .small { font-size: 13px; }
 .err { color: var(--bad); }
+span.ok { color: var(--ok); }
+.setting[hidden], [hidden] { display: none !important; }
 .center { text-align: center; padding: 48px 16px; }
 .spacer { flex: 1; }
 .icon { width: 16px; height: 16px; fill: currentColor; flex: none; }

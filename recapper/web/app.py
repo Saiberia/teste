@@ -32,7 +32,8 @@ from ..engine import LiveSession, Runtime, SessionClosed
 from ..knowledge import TEXT_SUFFIXES
 from ..models import ActionItem, Item, ItemKind, ItemOrigin, MeetingReport, Segment
 from ..prefs import PrefsStore, SettingsError, apply_prefs, public_values, schema, validate_update
-from ..providers import TracingLLM
+from ..llm import LLMError
+from ..providers import OpenAICompatLLM, TracingLLM, normalize_base_url
 from ..render import report_to_docx, report_to_markdown
 from ..store import ReportStore
 from ..transcript import parse_transcript
@@ -103,6 +104,13 @@ class AssistRequest(BaseModel):
 class SpeakerRename(BaseModel):
     old: str = Field(min_length=1, max_length=100)
     new: str = Field(min_length=1, max_length=100)
+
+
+class AITest(BaseModel):
+    """Unsaved form values; empty fields fall back to the saved settings."""
+    base_url: str = ""
+    api_key: str = ""
+    model: str = ""
 
 
 class SettingsUpdate(BaseModel):
@@ -222,6 +230,30 @@ def create_app(
                     state["asr"], state["asr_error"] = None, ""
         store.purge_older_than(new.retention_days)
         return {"values": public_values(new), "mode": runtime.mode, "llm_error": runtime.llm_error}
+
+    @app.post("/api/ai/test", dependencies=[Depends(auth)])
+    def ai_test(body: AITest) -> dict:
+        """Check an OpenAI-compatible server: list its models, then send a one-word request."""
+        s = settings_now()
+        base_url = normalize_base_url(body.base_url or s.openai_base_url)
+        if not base_url.startswith(("http://", "https://")):
+            raise HTTPException(422, "укажите адрес сервера, начиная с http:// или https://")
+        llm = OpenAICompatLLM(base_url, body.api_key or s.openai_api_key, body.model or s.openai_model, timeout=30)
+        out: dict[str, Any] = {"base_url": base_url, "models": [], "models_error": "", "reply": "", "error": ""}
+        try:
+            out["models"] = llm.list_models()
+        except LLMError as exc:
+            out["models_error"] = str(exc)
+        model = body.model or s.openai_model
+        if out["models"] and model not in out["models"]:
+            out["error"] = f"модели «{model}» нет на сервере — выберите из списка"
+        else:
+            try:
+                out["reply"] = llm.ping()[:200]
+            except LLMError as exc:
+                out["error"] = str(exc)
+        out["ok"] = not out["error"]
+        return out
 
     # --- sessions ------------------------------------------------------------
     def _gc() -> None:

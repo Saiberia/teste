@@ -232,3 +232,56 @@ def test_simulators_emit_distinct_raw_outputs():
     assert validate_schema(broken.json("s", "p", DETECT_SCHEMA), DETECT_SCHEMA)
     assert isinstance(SimulatedLLM().research("s", "Задача: X").text, str)
     assert ResearchResult("x").sources == []
+
+
+# --- OpenAI-compatible proxies (Gemini proxy, Ollama…) -----------------------
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("http://127.0.0.1:8045", "http://127.0.0.1:8045/v1"),
+    ("http://127.0.0.1:8045/", "http://127.0.0.1:8045/v1"),
+    ("http://127.0.0.1:8045/v1/", "http://127.0.0.1:8045/v1"),
+    ("https://api.openai.com/v1/chat/completions", "https://api.openai.com/v1"),
+    ("https://gw.example.com/openai/v1", "https://gw.example.com/openai/v1"),
+])
+def test_normalize_base_url(raw, expected):
+    from recapper.providers import normalize_base_url
+    assert normalize_base_url(raw) == expected
+
+
+def test_openai_compat_lists_models_and_pings():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.startswith("/v1/")
+        assert request.headers["authorization"] == "Bearer sk-test"
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"data": [{"id": "gemini-2.5-flash"}, {"id": "gemini-3-pro-high"}]})
+        return httpx.Response(200, json={"choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}]})
+
+    llm = OpenAICompatLLM("http://127.0.0.1:8045", "sk-test", "gemini-2.5-flash", transport=httpx.MockTransport(handler))
+    assert llm.list_models() == ["gemini-2.5-flash", "gemini-3-pro-high"]
+    assert llm.ping() == "OK"
+
+
+def test_openai_compat_downgrades_on_proxy_schema_error():
+    """A Gemini proxy fails a strict json_schema with an unrelated 400 message: fall back, don't fail."""
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen.append((body.get("response_format") or {}).get("type"))
+        if body.get("response_format", {}).get("type") == "json_schema":
+            return httpx.Response(400, text='{"error":"Invalid JSON payload received. Unknown name \\"strict\\""}')
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"items": []}'}, "finish_reason": "stop"}]})
+
+    llm = OpenAICompatLLM("http://proxy:1", model="m", transport=httpx.MockTransport(handler))
+    assert llm.json("sys", "p", {"type": "object"}) == {"items": []}
+    assert seen == ["json_schema", "json_object"]
+
+
+def test_openai_compat_does_not_downgrade_on_context_length():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, text="maximum context length exceeded")
+
+    llm = OpenAICompatLLM("http://proxy:1", model="m", transport=httpx.MockTransport(handler))
+    with pytest.raises(LLMError, match="context"):
+        llm.json("sys", "p", {"type": "object"})

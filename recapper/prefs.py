@@ -37,6 +37,7 @@ class Field:
     min: float | None = None
     max: float | None = None
     scope: str = "server"  # server | ui | desktop (who consumes it)
+    show_if: tuple[str, tuple[str, ...]] | None = None  # (other key, values) — hide the field otherwise
 
 
 def _opts(*pairs: tuple[str, str, str]) -> tuple[tuple[str, str, str], ...]:
@@ -56,28 +57,41 @@ FIELDS: tuple[Field, ...] = (
           "«Авто»: Claude, если задан ключ; иначе OpenAI-совместимый сервер; иначе офлайн.",
           "Auto: Claude if a key is set, otherwise an OpenAI-compatible server, otherwise offline.",
           options=_opts(("auto", "Авто", "Auto"), ("claude", "Claude (Anthropic)", "Claude (Anthropic)"),
-                        ("openai", "OpenAI-совместимый (OpenAI, Ollama, LM Studio…)", "OpenAI-compatible (OpenAI, Ollama, LM Studio…)"),
+                        ("openai", "OpenAI-совместимый (OpenAI, Gemini-прокси, Ollama, LM Studio…)", "OpenAI-compatible (OpenAI, Gemini proxy, Ollama, LM Studio…)"),
                         ("none", "Без ИИ (офлайн)", "No AI (offline)"),
                         ("sim-good", "Симуляция: хороший ИИ", "Simulation: good AI"),
                         ("sim-sloppy", "Симуляция: неаккуратный ИИ", "Simulation: sloppy AI"),
                         ("sim-broken", "Симуляция: сломанный ИИ", "Simulation: broken AI"))),
-    Field("anthropic_api_key", "secret", "ai", "Ключ Anthropic API", "Anthropic API key"),
+    Field("anthropic_api_key", "secret", "ai", "Ключ Anthropic API", "Anthropic API key",
+          "Ключ из console.anthropic.com (подписка Claude.ai не подходит).", "Key from console.anthropic.com (a Claude.ai subscription does not work).",
+          show_if=("llm_provider", ("auto", "claude"))),
     Field("model", "enum", "ai", "Модель Claude", "Claude model",
           options=_opts(("claude-opus-5-5", "Claude Opus 5.5 (рекомендуется)", "Claude Opus 5.5 (recommended)"),
                         ("claude-sonnet-5-5", "Claude Sonnet 5.5 (быстрее, дешевле)", "Claude Sonnet 5.5 (faster, cheaper)"),
-                        ("claude-fable-5-1", "Claude Fable 5.1 (самая сильная, дорогая)", "Claude Fable 5.1 (most capable, costly)"))),
+                        ("claude-fable-5-1", "Claude Fable 5.1 (самая сильная, дорогая)", "Claude Fable 5.1 (most capable, costly)")),
+          show_if=("llm_provider", ("auto", "claude"))),
     Field("answer_effort", "enum", "ai", "Глубина проработки ответов", "Answer effort",
           options=_opts(("low", "Низкая", "Low"), ("medium", "Средняя", "Medium"), ("high", "Высокая", "High"),
-                        ("xhigh", "Очень высокая", "Very high"), ("max", "Максимальная", "Max"))),
+                        ("xhigh", "Очень высокая", "Very high"), ("max", "Максимальная", "Max")),
+          show_if=("llm_provider", ("auto", "claude"))),
     Field("detect_effort", "enum", "ai", "Глубина поиска вопросов", "Detection effort",
-          options=_opts(("low", "Низкая", "Low"), ("medium", "Средняя", "Medium"), ("high", "Высокая", "High"))),
+          options=_opts(("low", "Низкая", "Low"), ("medium", "Средняя", "Medium"), ("high", "Высокая", "High")),
+          show_if=("llm_provider", ("auto", "claude"))),
     Field("web_search", "bool", "ai", "Веб-поиск в ответах", "Web search in answers",
-          "Отключите для конфиденциальных встреч.", "Turn off for confidential meetings."),
-    Field("web_search_max_uses", "int", "ai", "Максимум поисков на ответ", "Max searches per answer", min=1, max=20),
-    Field("openai_base_url", "str", "ai", "Адрес OpenAI-совместимого сервера", "OpenAI-compatible base URL",
-          "Например https://api.openai.com/v1 или http://localhost:11434/v1", "e.g. https://api.openai.com/v1 or http://localhost:11434/v1"),
-    Field("openai_api_key", "secret", "ai", "Ключ OpenAI-совместимого сервера", "OpenAI-compatible API key"),
-    Field("openai_model", "str", "ai", "Модель OpenAI-совместимого сервера", "OpenAI-compatible model"),
+          "Только для Claude. Отключите для конфиденциальных встреч.", "Claude only. Turn off for confidential meetings.",
+          show_if=("llm_provider", ("auto", "claude"))),
+    Field("web_search_max_uses", "int", "ai", "Максимум поисков на ответ", "Max searches per answer", min=1, max=20,
+          show_if=("llm_provider", ("auto", "claude"))),
+    Field("openai_base_url", "str", "ai", "Адрес сервера (base URL)", "Server base URL",
+          "Например http://127.0.0.1:8045/v1 (прокси), https://api.openai.com/v1, http://localhost:11434/v1 (Ollama). "
+          "Если /v1 не указан, он добавится сам.",
+          "e.g. http://127.0.0.1:8045/v1 (proxy), https://api.openai.com/v1, http://localhost:11434/v1 (Ollama). "
+          "/v1 is added if missing.", show_if=("llm_provider", ("auto", "openai"))),
+    Field("openai_api_key", "secret", "ai", "API-ключ сервера", "Server API key",
+          "Для Ollama/LM Studio можно оставить пустым.", "May be empty for Ollama/LM Studio.", show_if=("llm_provider", ("auto", "openai"))),
+    Field("openai_model", "str", "ai", "Модель", "Model",
+          "Нажмите «Проверить подключение», чтобы выбрать из списка моделей сервера.",
+          "Press “Test connection” to pick from the server's model list.", show_if=("llm_provider", ("auto", "openai"))),
     # Assistant
     Field("wake_words", "str", "assistant", "Слова-обращения к ассистенту", "Wake words",
           "Через запятую. Фраза «Ассистент, посчитай…» станет задачей.", "Comma-separated. “Assistant, calculate…” becomes a task."),
@@ -102,7 +116,8 @@ FIELDS: tuple[Field, ...] = (
     Field("whisper_model", "enum", "capture", "Модель распознавания", "Recognition model",
           "Больше — точнее, но медленнее. На ноутбуке без видеокарты берите small.", "Larger is more accurate but slower.",
           options=_opts(("tiny", "tiny (быстро)", "tiny (fast)"), ("base", "base", "base"), ("small", "small (баланс)", "small (balanced)"),
-                        ("medium", "medium", "medium"), ("large-v3", "large-v3 (точно, медленно)", "large-v3 (accurate, slow)"))),
+                        ("medium", "medium", "medium"), ("large-v3", "large-v3 (точно, медленно)", "large-v3 (accurate, slow)")),
+          show_if=("asr_provider", ("faster-whisper",))),
     Field("capture_sources", "multi", "capture", "Что записывать", "Capture sources", scope="desktop",
           options=_opts(("mic", "Мой микрофон", "My microphone"), ("system", "Звук собеседников (системный)", "Other participants (system audio)"))),
     Field("capture_chunk_seconds", "int", "capture", "Длина фрагмента, сек", "Chunk length, s",
@@ -122,7 +137,7 @@ FIELDS: tuple[Field, ...] = (
 )
 
 GROUPS = {"language": ("Язык", "Language"), "ai": ("ИИ", "AI"), "assistant": ("Ассистент", "Assistant"),
-          "capture": ("Запись и распознавание", "Capture and recognition"), "desktop": ("Приложение", "App"),
+          "capture": ("Запись и распознавание", "Capture and recognition"), "desktop": ("Оформление и приложение", "Appearance and app"),
           "privacy": ("Данные и приватность", "Data and privacy")}
 FIELD_BY_KEY = {f.key: f for f in FIELDS}
 _RESTART_KEYS = {"asr_provider", "whisper_model", "meeting_language"}
@@ -249,6 +264,7 @@ def schema() -> list[dict]:
             "label": {"ru": f.label_ru, "en": f.label_en}, "help": {"ru": f.help_ru, "en": f.help_en},
             "options": [{"value": v, "label": {"ru": r, "en": e}} for v, r, e in _enum_options(f)],
             "min": f.min, "max": f.max, "scope": f.scope, "restart": f.key in _RESTART_KEYS,
+            "show_if": {"key": f.show_if[0], "values": list(f.show_if[1])} if f.show_if else None,
         }
         for f in FIELDS
     ]

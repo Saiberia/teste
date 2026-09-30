@@ -107,7 +107,9 @@
     const m = S.health.mode || "offline";
     if (m === "offline") return t("mode_offline");
     if (m.startsWith("sim")) return t("mode_sim") + " (" + m + ")";
-    return m === "claude" ? "Claude" : m === "openai" ? "OpenAI-compatible" : m;
+    if (m === "openai") return t("mode_ai") + ": " + (S.settings.openai_model || "OpenAI");
+    if (m === "claude") return t("mode_ai") + ": " + (S.settings.model || "Claude").replace(/^claude-(\w)/, (_, c) => "Claude " + c.toUpperCase()).replace(/-(\d+)-(\d+)$/, " $1.$2");
+    return m;
   }
 
   // ---- shell & routing -------------------------------------------------------------------
@@ -543,7 +545,9 @@
     const form = el("form", { class: "settings", onsubmit: (e) => e.preventDefault() });
     const inputs = {};
     const groups = {};
+    const inDesktop = !!window.recapperDesktop;
     for (const f of S.schema) {
+      if (f.scope === "desktop" && f.group === "desktop" && !inDesktop) continue; // panel options exist only in the app
       if (!groups[f.group]) { groups[f.group] = el("fieldset", {}, el("legend", {}, f.group_label[L] || f.group_label.ru)); form.append(groups[f.group]); }
       const val = S.settings[f.key];
       let input;
@@ -554,11 +558,48 @@
       else if (f.type === "secret") input = el("input", { type: "password", autocomplete: "off", placeholder: (val && val.set ? t("secret_set") : t("secret_empty")) + " — " + t("secret_ph") });
       else if (f.type === "int" || f.type === "float") input = el("input", { type: "number", step: f.type === "int" ? "1" : "0.001", min: f.min ?? "", max: f.max ?? "", value: val ?? "" });
       else input = el("input", { type: "text", value: val ?? "" });
-      inputs[f.key] = { f, input };
-      groups[f.group].append(el("label", { class: "setting" },
+      const row = el("label", { class: "setting", "data-key": f.key },
         el("span", { class: "label" }, f.label[L] || f.label.ru, f.restart ? el("em", { class: "muted small" }, " · " + t("restart_note")) : null),
-        input, f.help[L] ? el("span", { class: "muted small" }, f.help[L]) : null));
+        input, f.help[L] ? el("span", { class: "muted small" }, f.help[L]) : null);
+      inputs[f.key] = { f, input, row };
+      groups[f.group].append(row);
     }
+    // Show only the fields that apply to the current choice (e.g. the key of the selected AI provider).
+    const syncVisibility = () => {
+      for (const { f, row } of Object.values(inputs)) {
+        if (!f.show_if) continue;
+        const ctl = inputs[f.show_if.key];
+        row.hidden = !!ctl && !f.show_if.values.includes(ctl.input.value);
+      }
+      if (testRow) testRow.hidden = inputs.openai_base_url ? inputs.openai_base_url.row.hidden : true;
+    };
+    // OpenAI-compatible server: test the unsaved values and offer the server's models.
+    let testRow = null;
+    if (inputs.openai_model) {
+      const list = el("datalist", { id: "openai-models" });
+      inputs.openai_model.input.setAttribute("list", "openai-models");
+      inputs.openai_model.input.setAttribute("autocomplete", "off");
+      const status = el("span", { class: "muted small", role: "status" });
+      const btn = el("button", { class: "btn small", type: "button" }, t("ai_test"));
+      btn.onclick = async () => {
+        btn.disabled = true; status.className = "muted small"; status.textContent = t("ai_testing");
+        try {
+          const r = await api("/api/ai/test", { json: { base_url: inputs.openai_base_url.input.value.trim(),
+            api_key: inputs.openai_api_key.input.value.trim(), model: inputs.openai_model.input.value.trim() } });
+          list.replaceChildren(...r.models.map((m) => el("option", { value: m })));
+          if (r.base_url && inputs.openai_base_url.input.value.trim() !== r.base_url) inputs.openai_base_url.input.value = r.base_url;
+          const found = r.models.length ? t("ai_models_found") + ": " + r.models.length + ". " : (r.models_error ? r.models_error + ". " : "");
+          if (r.ok) { status.className = "ok small"; status.textContent = found + t("ai_test_ok") + ": «" + r.reply + "»"; }
+          else { status.className = "err small"; status.textContent = found + r.error; }
+          if (!r.ok && r.models.length) { inputs.openai_model.input.value = ""; inputs.openai_model.input.placeholder = t("ai_pick_model"); inputs.openai_model.input.focus(); }
+        } catch (e) { status.className = "err small"; status.textContent = e.message; }
+        finally { btn.disabled = false; }
+      };
+      testRow = el("div", { class: "setting" }, el("div", { class: "row wrap" }, btn, status), list);
+      inputs.openai_model.row.after(testRow);
+    }
+    for (const { input } of Object.values(inputs)) if (input.tagName === "SELECT") input.addEventListener("change", syncVisibility);
+    syncVisibility();
     const save = el("button", { class: "btn primary", type: "button" }, t("save"));
     save.onclick = async () => {
       const values = {};

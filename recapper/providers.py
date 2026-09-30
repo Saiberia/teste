@@ -26,17 +26,32 @@ from .llm import LLM, ClaudeLLM, LLMError, ResearchResult
 
 
 def _rejects_format(message: str) -> bool:
-    """A 400 caused by an unsupported response_format (not e.g. context length)."""
+    """A 400/422 caused by the response_format (not e.g. context length).
+
+    Proxies (Gemini, etc.) often translate the schema and fail with an unrelated
+    message, so any 400/422 that is not about length counts as "try a simpler mode".
+    """
     m = message.lower()
-    if "provider error 400" not in m or "context" in m or "too long" in m or "maximum" in m:
+    if not ("provider error 400" in m or "provider error 422" in m):
         return False
-    return any(h in m for h in ("response_format", "json_schema", "json_object", "not supported", "unsupported"))
+    return not any(h in m for h in ("context", "too long", "maximum", "token"))
+
+
+def normalize_base_url(url: str) -> str:
+    """``http://host:8045`` -> ``http://host:8045/v1``; an explicit path is kept."""
+    url = (url or "").strip().rstrip("/")
+    if url.endswith("/chat/completions"):
+        url = url[: -len("/chat/completions")]
+    scheme, sep, rest = url.partition("://")
+    if sep and "/" not in rest:
+        url += "/v1"
+    return url
 
 
 class OpenAICompatLLM:
     def __init__(self, base_url: str, api_key: str = "", model: str = "gpt-4o-mini", timeout: float = 120.0,
                  transport: httpx.BaseTransport | None = None):
-        self.base_url = base_url.rstrip("/")
+        self.base_url = normalize_base_url(base_url)
         self.model = model
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         self._http = httpx.Client(timeout=timeout, headers=headers, transport=transport)
@@ -64,6 +79,24 @@ class OpenAICompatLLM:
         if choice.get("finish_reason") == "length":
             raise LLMError("response was cut off (finish_reason=length)")
         return content
+
+    def list_models(self) -> list[str]:
+        try:
+            resp = self._http.get(f"{self.base_url}/models")
+        except httpx.HTTPError as exc:
+            raise LLMError(f"cannot reach {self.base_url}: {exc}") from exc
+        if resp.status_code >= 400:
+            raise LLMError(f"provider error {resp.status_code}: {resp.text[:300]}")
+        try:
+            data = resp.json()
+            rows = data.get("data", data.get("models", [])) if isinstance(data, dict) else data
+            ids = [r.get("id") or r.get("name") if isinstance(r, dict) else r for r in rows]
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise LLMError(f"unexpected /models response: {resp.text[:200]}") from exc
+        return sorted({str(i) for i in ids if i})
+
+    def ping(self) -> str:
+        return self._chat("Reply with one word.", "Say OK.", None).strip()
 
     def json(self, system: str, prompt: str, schema: dict, effort: str = "low") -> dict:
         formats = {

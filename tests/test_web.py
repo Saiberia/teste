@@ -1668,3 +1668,51 @@ def test_answer_limit_is_visible_in_final_report(make_client):
     _, report = finish(client, sid)
     assert "готовится" not in client.get(f"/api/meetings/{sid}/markdown").text
     assert all(answer_of(report, i["id"]) for i in report["items"] if i["origin"] == "voice")
+
+
+# --- settings UX: provider-dependent fields and the connection test ------------
+
+
+def test_schema_marks_provider_specific_fields(client):
+    rows = {f["key"]: f for f in client.get("/api/settings").json()["schema"]}
+    assert rows["anthropic_api_key"]["show_if"] == {"key": "llm_provider", "values": ["auto", "claude"]}
+    assert rows["openai_api_key"]["show_if"] == {"key": "llm_provider", "values": ["auto", "openai"]}
+    assert rows["whisper_model"]["show_if"]["key"] == "asr_provider"
+    assert rows["llm_provider"]["show_if"] is None
+    # Labels of the OpenAI-compatible fields no longer name a single vendor.
+    assert "Anthropic" not in rows["openai_api_key"]["label"]["ru"]
+
+
+def test_ai_test_endpoint_uses_form_values(client, monkeypatch):
+    import httpx
+
+    from recapper.providers import OpenAICompatLLM
+
+    calls = []
+
+    def handler(request):
+        calls.append((str(request.url), request.headers.get("authorization")))
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": "gemini-2.5-flash"}]})
+        return httpx.Response(200, json={"choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}]})
+
+    monkeypatch.setattr(webapp, "OpenAICompatLLM",
+                        lambda *a, **kw: OpenAICompatLLM(*a, transport=httpx.MockTransport(handler), **kw))
+    r = client.post("/api/ai/test", json={"base_url": "http://127.0.0.1:8045", "api_key": "sk-x", "model": "gemini-2.5-flash"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] and body["reply"] == "OK" and body["models"] == ["gemini-2.5-flash"]
+    assert body["base_url"] == "http://127.0.0.1:8045/v1"
+    assert calls[0] == ("http://127.0.0.1:8045/v1/models", "Bearer sk-x")
+
+    bad = client.post("/api/ai/test", json={"base_url": "http://127.0.0.1:8045", "model": "nope"}).json()
+    assert not bad["ok"] and "nope" in bad["error"]
+
+
+def test_ai_test_reports_unreachable_server(client):
+    body = client.post("/api/ai/test", json={"base_url": "http://127.0.0.1:9", "model": "m"}).json()
+    assert not body["ok"] and body["models_error"] and body["error"]
+
+
+def test_ai_test_requires_auth(client):
+    assert client.post("/api/ai/test", json={}, headers={"Authorization": "Bearer wrong"}).status_code == 401

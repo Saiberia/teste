@@ -46,6 +46,25 @@ Recapper слушает встречу и **выполняет задачи, к�
 у Windows и macOS одинаково. Так же устроен Granola (Electron). Платформенные мелочи закрываются
 внутри оболочки.
 
+## Запуск на своём компьютере одной командой
+
+**Windows** (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/Saiberia/teste/claude/cloud-mode-claude-code-g6q3pn/deploy/run-windows.ps1 | iex
+```
+
+**macOS / Linux** (Терминал):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Saiberia/teste/claude/cloud-mode-claude-code-g6q3pn/deploy/run-mac.sh | bash
+```
+
+Скрипт ставит `uv` (он сам скачает Python), Recapper с локальным распознаванием речи, создаёт постоянный токен
+и открывает `http://127.0.0.1:8000/?token=…`. На Windows появляется ярлык `Recapper.cmd` на рабочем столе.
+По умолчанию ИИ — OpenAI-совместимый сервер `http://127.0.0.1:8045/v1` (локальный Gemini-прокси);
+в «Настройки → ИИ» можно сменить адрес, ключ и модель и нажать «Проверить подключение».
+
 ## Быстрый старт (разработка)
 
 ```bash
