@@ -140,3 +140,52 @@ def test_decode_audio_without_faster_whisper_decoder(tmp_path):
     out.close()
     audio = decode_audio(path)
     assert audio.dtype == np.float32 and abs(len(audio) - 16000) < 400 and 0.3 < abs(audio).max() < 0.6
+
+
+class _GpuBrokenModel:
+    """Loads on "auto" (picks CUDA) but fails while decoding, like a Windows PC without cuBLAS."""
+    inits = []
+
+    def __init__(self, size, device, compute_type):
+        _GpuBrokenModel.inits.append((device, compute_type))
+        self.device = device
+
+    def transcribe(self, audio, language, vad_filter):
+        seg = types.SimpleNamespace
+
+        def gen():
+            if self.device != "cpu":
+                raise RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+            yield seg(text="Привет", start=0.0, end=1.0)
+
+        return gen(), None
+
+
+def test_whisper_falls_back_to_cpu_when_gpu_libraries_are_missing(monkeypatch, tmp_path):
+    import recapper.asr
+
+    module = types.ModuleType("faster_whisper")
+    module.WhisperModel = _GpuBrokenModel
+    monkeypatch.setitem(sys.modules, "faster_whisper", module)
+    monkeypatch.setattr(recapper.asr, "decode_audio", str)
+    _GpuBrokenModel.inits.clear()
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"x")
+    t = FasterWhisperTranscriber("small", "ru")
+    assert [s.text for s in t.transcribe(audio)] == ["Привет"]
+    assert _GpuBrokenModel.inits == [("auto", "default"), ("cpu", "int8")]
+    assert [s.text for s in t.transcribe(audio)] == ["Привет"]  # stays on CPU
+    assert len(_GpuBrokenModel.inits) == 2
+
+
+def test_whisper_falls_back_to_cpu_when_gpu_init_fails(monkeypatch):
+    class InitBroken(_GpuBrokenModel):
+        def __init__(self, size, device, compute_type):
+            if device != "cpu":
+                raise RuntimeError("CUDA driver version is insufficient")
+            super().__init__(size, device, compute_type)
+
+    module = types.ModuleType("faster_whisper")
+    module.WhisperModel = InitBroken
+    monkeypatch.setitem(sys.modules, "faster_whisper", module)
+    assert FasterWhisperTranscriber("small", "ru").device == "cpu"

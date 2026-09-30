@@ -40,6 +40,8 @@ try {
 if (-not $env:RECAPPER_LLM)          { $env:RECAPPER_LLM = "openai" }
 if (-not $env:OPENAI_BASE_URL)       { $env:OPENAI_BASE_URL = "http://127.0.0.1:8045/v1" }
 if (-not $env:RECAPPER_OPENAI_MODEL) { $env:RECAPPER_OPENAI_MODEL = "gemini-2.5-flash" }
+# Speech recognition on the CPU: the GPU path needs CUDA 12 + cuDNN 9 DLLs that most PCs don't have.
+if (-not $env:RECAPPER_WHISPER_DEVICE) { $env:RECAPPER_WHISPER_DEVICE = "cpu" }
 
 # 6. Start the server, open the browser when it answers
 $Url = "http://127.0.0.1:$Port"
