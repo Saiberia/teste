@@ -156,3 +156,14 @@ def test_llm_detector_empty_input_no_call():
     llm = FakeLLM()
     assert LLMDetector(llm).detect([], [], []) == []
     assert llm.calls == []
+
+
+def test_wake_word_from_system_audio_is_ignored():
+    from recapper.detect import CommandDetector
+    from recapper.models import Segment
+
+    d = CommandDetector()
+    video = Segment(speaker="Собеседники", text="Ассистент, посчитай конверсию в Купер.", source="system")
+    mine = Segment(speaker="Я", text="Ассистент, посчитай конверсию в Купер.", source="mic")
+    assert d.detect([video], [], []) == []
+    assert len(d.detect([mine], [], [])) == 1

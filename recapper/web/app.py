@@ -372,7 +372,7 @@ def create_app(
             raw = await run_in_threadpool(transcribe)
         except ASRError as exc:
             raise HTTPException(422, str(exc)) from exc
-        segments = [Segment(speaker=seg.speaker or speaker, text=seg.text, start=(seg.start or 0.0) + max(offset, 0.0),
+        segments = [Segment(speaker=seg.speaker or speaker, text=seg.text, source=source, start=(seg.start or 0.0) + max(offset, 0.0),
                             end=(seg.end + max(offset, 0.0)) if seg.end is not None else None) for seg in raw]
         items = await run_in_threadpool(sess.add_segments, segments) if segments else []
         return {"added": len(segments), "segments": [x.model_dump(mode="json") for x in segments],

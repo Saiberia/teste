@@ -68,6 +68,8 @@ class CommandDetector:
     def detect(self, new: list[Segment], context: list[Segment], known: list[Item]) -> list[Item]:
         found: list[Item] = []
         for idx, seg in enumerate(new):
+            if seg.source == "system":  # a video or other participants saying "ассистент" is not my command
+                continue
             parts = sentences(seg.text)
             for j, sentence in enumerate(parts):
                 body = self._command(sentence)

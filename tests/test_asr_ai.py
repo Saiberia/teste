@@ -144,3 +144,18 @@ def test_get_transcriber_ai_uses_ai_settings():
     assert get_transcriber(s).model == "gemini-2.5-flash-lite"
     with pytest.raises(ASRError, match="Настройки"):
         get_transcriber(Settings(asr_provider="ai"))
+
+
+def test_repeated_context_line_is_cut():
+    from recapper.asr import _drop_repeats
+    from recapper.models import Segment
+
+    ctx = [("Собеседник 1", "Ну, смотрите, Артём, вчера, как говорила, я работала с видеосервисами. Единственное, что не смогла "
+                            "зайти в Mail.ru, потому что те, что доступы есть, ни на YouTube, ни на Mail.ru написано, что")]
+    new = [Segment(speaker="Собеседник 1", text="Ну смотрите, Артем, вчера как говорила, я работала с видеосервисами. "
+                   "Единственное, что не смогла зайти в Mail.ru, потому что те, что доступы есть, ни на YouTube, "
+                   "ни на Mail.ru, написано, что поменены пароли."),
+           Segment(speaker="Собеседник 2", text="М-м. Я на YouTube сейчас тебе доступ сброшу")]
+    out = _drop_repeats(new, ctx)
+    assert [s.text for s in out] == ["поменены пароли", "М-м. Я на YouTube сейчас тебе доступ сброшу"]
+    assert _drop_repeats(new[1:], ctx)[0].text == new[1].text  # unrelated lines stay intact

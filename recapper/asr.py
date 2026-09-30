@@ -158,10 +158,10 @@ class LLMTranscriber:
         ctx = "\n".join(f"{spk}: {text}" for spk, text in context[-8:])
         return (self._prompt() + "\n\nВ записи могут говорить несколько человек. Каждую реплику пиши с новой строки "
                 "в формате «Подпись: текст». Если человек назвал себя или к нему обратились по имени — подписывай "
-                "его этим именем, иначе «Собеседник 1», «Собеседник 2» и т. д. Одному голосу — всегда одна подпись."
+                "его этим именем, иначе «Собеседник 1», «Собеседник 2» и т. д. Одному голосу — всегда одна подпись. Реплики владельца микрофона сюда не попадают — это только собеседники."
                 + (f"\nУже известные участники: {', '.join(known)}. Используй те же подписи для тех же людей."
                    if known else "")
-                + (f"\nПоследние реплики перед этим фрагментом (для контекста, не повторяй их):\n{ctx}" if ctx else ""))
+                + (f"\nПоследние реплики перед этим фрагментом — они УЖЕ записаны, не повторяй их; начни с первого нового слова в этой записи:\n{ctx}" if ctx else ""))
 
     WINDOW = 60.0  # long recordings (uploaded files) are sent in pieces of this many seconds
 
@@ -217,7 +217,7 @@ class LLMTranscriber:
             if not text:
                 return []
             if diarize and mode == "chat":
-                return _split_speakers(text, duration)
+                return _drop_repeats(_split_speakers(text, duration), context)
             return [Segment(text=text, start=0.0, end=round(duration, 2))]
         raise ASRError("ИИ не смог распознать звук. Выберите модель, которая понимает аудио (например gemini-2.5-flash), "
                        "или локальное распознавание. Ответ сервера: " + " | ".join(errors))
@@ -258,6 +258,46 @@ def _split_speakers(text: str, duration: float) -> list[Segment]:
         end = pos + duration * len(words) / total
         out.append(Segment(speaker=spk, text=words, start=round(pos, 2), end=round(end, 2)))
         pos = end
+    return out
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"\w+", text.lower().replace("ё", "е"))
+
+
+def _drop_repeats(segments: list[Segment], context: list[tuple[str, str]]) -> list[Segment]:
+    """The model sometimes re-transcribes lines it was given as context: cut that overlap."""
+    import difflib
+
+    recent = [_words(t) for _, t in context[-4:]]
+    out = []
+    for seg in segments:
+        words = seg.text.split()
+        norm = _words(seg.text)
+        cut = 0
+        for prev in recent:
+            if len(prev) < 3 or not norm:
+                continue
+            head = norm[: len(prev) + 3]
+            m = difflib.SequenceMatcher(None, prev, head, autojunk=False)
+            if m.ratio() * (len(prev) + len(head)) / 2 >= 0.8 * len(prev):  # most of prev is repeated at the start
+                last = max((b.b + b.size for b in m.get_matching_blocks() if b.size), default=0)
+                cut = max(cut, last)
+        if cut:
+            # map the cut in normalized words back onto the original words
+            kept, seen = [], 0
+            for w in words:
+                n = len(_words(w))
+                if seen >= cut:
+                    kept.append(w)
+                seen += n
+            words = kept
+        text = " ".join(words)
+        if cut:
+            text = text.strip(" ,.;:—-")
+        if len(_words(text)) >= 1:
+            out.append(seg.model_copy(update={"text": text}))
+        recent.append(_words(seg.text))
     return out
 
 

@@ -16,6 +16,7 @@ class Segment(BaseModel):
     text: str
     start: float | None = None  # seconds from meeting start
     end: float | None = None
+    source: str = ""  # "mic" | "system" for live audio; wake words count only outside "system"
 
 
 class ItemKind(str, Enum):
