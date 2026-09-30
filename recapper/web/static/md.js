@@ -17,11 +17,16 @@
   function render(md) {
     const lines = esc(md || "").split("\n");
     const out = [];
-    let list = null, table = null;
+    let list = null, table = null, quote = null;
     const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+    const closeQuote = () => { if (quote) { const q = quote.filter(Boolean); if (q.length) out.push("<blockquote>" + q.map((l) => `<p>${inline(l)}</p>`).join("") + "</blockquote>"); quote = null; } };
     const closeTable = () => { if (table) { out.push("</tbody></table>"); table = null; } };
     for (const raw of lines) {
       const line = raw.trimEnd();
+      const qm = /^&gt;\s?(.*)$/.exec(line.trim());
+      if (qm) { closeList(); closeTable(); (quote = quote || []).push(qm[1].trim()); continue; }
+      closeQuote();
+      if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { closeList(); closeTable(); if (out.length && out[out.length - 1] !== "<hr>") out.push("<hr>"); continue; }
       const cells = /^\|(.+)\|$/.exec(line.trim());
       if (cells) {
         closeList();
@@ -40,7 +45,9 @@
       closeList();
       if (line.trim()) out.push(`<p>${inline(line)}</p>`);
     }
-    closeList(); closeTable();
+    closeQuote(); closeList(); closeTable();
+    while (out[0] === "<hr>") out.shift();
+    while (out[out.length - 1] === "<hr>") out.pop();
     return out.join("\n");
   }
   window.RecapperMarkdown = { render, esc };

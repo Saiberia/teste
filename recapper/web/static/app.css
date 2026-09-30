@@ -328,3 +328,6 @@ body.panel .item .md { font-size: 13px; }
   .card { padding: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+.md hr { border: 0; border-top: 1px solid var(--line, #e4e7ec); margin: 14px 0; }
+.md blockquote p { margin: 0 0 8px; } .md blockquote p:last-child { margin-bottom: 0; }
