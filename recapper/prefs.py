@@ -111,13 +111,28 @@ FIELDS: tuple[Field, ...] = (
     Field("others_label", "str", "assistant", "Как подписывать собеседников", "Label for other participants"),
     # Capture
     Field("asr_provider", "enum", "capture", "Распознавание речи", "Speech recognition",
-          "faster-whisper работает локально, звук не покидает компьютер.", "faster-whisper runs locally; audio never leaves the computer.",
-          options=_opts(("faster-whisper", "Локально (faster-whisper)", "Local (faster-whisper)"), ("none", "Выключено", "Off"))),
+          "Локально: звук не покидает компьютер. Через ИИ: фрагменты звука отправляются на OpenAI-совместимый сервер из раздела «ИИ» "
+          "(модель должна понимать аудио, например Gemini).",
+          "Local: audio never leaves the computer. By AI: audio chunks go to the OpenAI-compatible server from the AI section "
+          "(the model must understand audio, e.g. Gemini).",
+          options=_opts(("faster-whisper", "Локально (faster-whisper)", "Local (faster-whisper)"),
+                        ("ai", "Через подключённый ИИ (Gemini и др.)", "By the connected AI (Gemini etc.)"),
+                        ("none", "Выключено", "Off"))),
     Field("whisper_model", "enum", "capture", "Модель распознавания", "Recognition model",
           "Больше — точнее, но медленнее. На ноутбуке без видеокарты берите small.", "Larger is more accurate but slower.",
           options=_opts(("tiny", "tiny (быстро)", "tiny (fast)"), ("base", "base", "base"), ("small", "small (баланс)", "small (balanced)"),
                         ("medium", "medium", "medium"), ("large-v3", "large-v3 (точно, медленно)", "large-v3 (accurate, slow)")),
           show_if=("asr_provider", ("faster-whisper",))),
+    Field("asr_ai_model", "str", "capture", "Модель ИИ для распознавания", "AI model for transcription",
+          "Пусто — та же модель, что для ответов. Для скорости подойдёт быстрая модель, например gemini-2.5-flash.",
+          "Empty = the same model as for answers. A fast model such as gemini-2.5-flash works well.",
+          show_if=("asr_provider", ("ai",))),
+    Field("asr_ai_diarize", "bool", "capture", "Различать собеседников", "Tell participants apart",
+          "ИИ подписывает реплики из звука собеседников: по именам, если они прозвучали, иначе «Собеседник 1», «Собеседник 2». "
+          "Подписи можно переименовать в отчёте.",
+          "The AI labels lines from the participants' audio: by name when heard, otherwise “Speaker 1”, “Speaker 2”. "
+          "Labels can be renamed in the report.",
+          show_if=("asr_provider", ("ai",))),
     Field("capture_sources", "multi", "capture", "Что записывать", "Capture sources", scope="desktop",
           options=_opts(("mic", "Мой микрофон", "My microphone"), ("system", "Звук собеседников (системный)", "Other participants (system audio)"))),
     Field("capture_chunk_seconds", "int", "capture", "Длина фрагмента, сек", "Chunk length, s",
@@ -140,7 +155,7 @@ GROUPS = {"language": ("Язык", "Language"), "ai": ("ИИ", "AI"), "assistant
           "capture": ("Запись и распознавание", "Capture and recognition"), "desktop": ("Оформление и приложение", "Appearance and app"),
           "privacy": ("Данные и приватность", "Data and privacy")}
 FIELD_BY_KEY = {f.key: f for f in FIELDS}
-_RESTART_KEYS = {"asr_provider", "whisper_model", "meeting_language"}
+_RESTART_KEYS = {"asr_provider", "whisper_model", "meeting_language", "asr_ai_model"}
 
 
 class SettingsError(ValueError):

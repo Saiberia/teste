@@ -25,7 +25,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import __version__
 from ..answer import knowledge_context, memory_context
-from ..asr import ASRError, Transcriber, get_transcriber
+from ..asr import ASRError, LLMTranscriber, Transcriber, get_transcriber
 from ..assist import ASSIST_ACTIONS, TEMPLATES
 from ..config import Settings
 from ..engine import LiveSession, Runtime, SessionClosed
@@ -223,8 +223,9 @@ def create_app(
         old = settings_now()
         runtime.apply_settings(new)
         store.keep_segments = new.store_segments
-        if (old.asr_provider, old.whisper_model, old.meeting_language) != (new.asr_provider, new.whisper_model,
-                                                                            new.meeting_language):
+        asr_keys = ("asr_provider", "whisper_model", "meeting_language", "asr_ai_model", "openai_base_url",
+                    "openai_api_key", "openai_model")
+        if any(getattr(old, k) != getattr(new, k) for k in asr_keys):
             with asr_lock:
                 if transcriber is None:
                     state["asr"], state["asr_error"] = None, ""
@@ -356,17 +357,22 @@ def create_app(
         s = settings_now()
         speaker = s.me_label if source == "mic" else s.others_label
 
+        diarize = source == "system" and s.asr_ai_diarize and isinstance(transcriber, LLMTranscriber)
+        context = [(x.speaker or "", x.text) for x in sess.report.segments[-12:] if x.speaker != s.me_label] if diarize else []
+
         def transcribe() -> list[Segment]:
             with tempfile.TemporaryDirectory() as tmp:  # audio is deleted right after recognition
                 path = Path(tmp) / "chunk.wav"
                 path.write_bytes(data)
+                if diarize:
+                    return transcriber.transcribe(path, diarize=True, context=context)
                 return transcriber.transcribe(path)
 
         try:
             raw = await run_in_threadpool(transcribe)
         except ASRError as exc:
             raise HTTPException(422, str(exc)) from exc
-        segments = [Segment(speaker=speaker, text=seg.text, start=(seg.start or 0.0) + max(offset, 0.0),
+        segments = [Segment(speaker=seg.speaker or speaker, text=seg.text, start=(seg.start or 0.0) + max(offset, 0.0),
                             end=(seg.end + max(offset, 0.0)) if seg.end is not None else None) for seg in raw]
         items = await run_in_threadpool(sess.add_segments, segments) if segments else []
         return {"added": len(segments), "segments": [x.model_dump(mode="json") for x in segments],
@@ -478,7 +484,10 @@ def create_app(
                         raise HTTPException(413, "аудиофайл слишком большой")
                     out.write(chunk)
             try:
-                segments = await run_in_threadpool(transcriber.transcribe, path)
+                if isinstance(transcriber, LLMTranscriber):
+                    segments = await run_in_threadpool(transcriber.transcribe, path, settings_now().asr_ai_diarize)
+                else:
+                    segments = await run_in_threadpool(transcriber.transcribe, path)
             except ASRError as exc:
                 raise HTTPException(422, str(exc)) from exc
         # The audio file is deleted here: only text is kept.

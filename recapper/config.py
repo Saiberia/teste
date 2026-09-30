@@ -54,8 +54,10 @@ class Settings:
     store_segments: bool = True
     retention_days: int = 0  # 0 = keep forever
     # ASR
-    asr_provider: str = "none"  # none | faster-whisper
+    asr_provider: str = "none"  # none | faster-whisper | ai
     whisper_model: str = "small"
+    asr_ai_diarize: bool = True  # "ai" provider: label other participants (Собеседник 1, 2… or names)
+    asr_ai_model: str = ""  # "ai" provider: empty = the same model as openai_model
     # Desktop / capture (read by the desktop app and capture.js)
     capture_chunk_seconds: int = 12
     capture_sources: list[str] = field(default_factory=lambda: ["mic", "system"])
@@ -112,6 +114,7 @@ class Settings:
             retention_days=int(env("RECAPPER_RETENTION_DAYS", "0")),
             asr_provider=env("RECAPPER_ASR", "none"),
             whisper_model=env("RECAPPER_WHISPER_MODEL", cls.whisper_model),
+            asr_ai_model=env("RECAPPER_ASR_AI_MODEL", ""),
             telegram_token=env("TELEGRAM_BOT_TOKEN", ""),
             telegram_allowed_users={int(x) for x in allowed.split(",") if x.strip()},
             telegram_public=_bool("RECAPPER_TELEGRAM_PUBLIC", False),
