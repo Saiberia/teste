@@ -34,7 +34,7 @@ from ..models import ActionItem, Item, ItemKind, ItemOrigin, MeetingReport, Segm
 from ..prefs import PrefsStore, SettingsError, apply_prefs, public_values, schema, validate_update
 from ..llm import LLMError
 from ..providers import OpenAICompatLLM, TracingLLM, normalize_base_url
-from ..render import report_to_docx, report_to_markdown
+from ..render import report_to_docx, report_to_html, report_to_markdown
 from ..store import ReportStore
 from ..transcript import parse_transcript
 
@@ -513,6 +513,10 @@ def create_app(
     @app.get("/api/meetings/{report_id}", dependencies=[Depends(auth)])
     def get_meeting(report_id: str) -> dict:
         return _report(report_id).model_dump(mode="json")
+
+    @app.get("/api/meetings/{report_id}/html", dependencies=[Depends(auth)])
+    def get_html(report_id: str) -> Response:
+        return Response(report_to_html(_report(report_id), settings_now().ui_language), media_type="text/html; charset=utf-8")
 
     @app.get("/api/meetings/{report_id}/markdown", dependencies=[Depends(auth)], response_class=PlainTextResponse)
     def get_markdown(report_id: str) -> str:

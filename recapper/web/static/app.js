@@ -464,6 +464,12 @@
     const exportBtn = (kind) => el("button", { class: "btn small ghost", onclick: async () => {
       try {
         if (kind === "json") download(`recapper-${id}.json`, JSON.stringify(report, null, 2), "application/json");
+        else if (kind === "html") {
+          const page = await (await fetch(`/api/meetings/${id}/html`, { headers: { Authorization: "Bearer " + token } })).text();
+          download(`recapper-${id}.html`, page, "text/html");
+          const w = window.open(URL.createObjectURL(new Blob([page], { type: "text/html" })), "_blank");
+          if (w) setTimeout(() => { try { w.print(); } catch (e) { /* user can print manually */ } }, 800);
+        }
         else if (kind === "md") download(`recapper-${id}.md`, await api(`/api/meetings/${id}/markdown`), "text/markdown");
         else {
           const resp = await fetch(`/api/meetings/${id}/docx`, { headers: { Authorization: "Bearer " + token } });
@@ -498,7 +504,7 @@
     view.append(
       el("div", { class: "row" }, el("a", { href: "#/meetings", class: "btn ghost small" }, "← " + t("back")),
         el("h1", {}, report.title), el("span", { class: "muted small" }, report.created_at.slice(0, 16).replace("T", " ") + (tplName ? " · " + tplName : "")),
-        el("span", { class: "spacer" }), exportBtn("md"), exportBtn("docx"), exportBtn("json")),
+        el("span", { class: "spacer" }), exportBtn("html"), exportBtn("md"), exportBtn("docx"), exportBtn("json")),
       el("div", { class: "live-grid" },
         el("div", { class: "col-main" },
           el("section", { class: "card" }, el("h2", {}, t("recap")), el("p", {}, r.summary || "—"),

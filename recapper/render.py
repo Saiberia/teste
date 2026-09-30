@@ -251,3 +251,92 @@ def report_to_docx(report: MeetingReport, lang: str = "ru") -> bytes:
 def _plain(md: str) -> str:
     md = re.sub(r"\[([^\]]*)\]\(<?([^)>]*)>?\)", r"\1 (\2)", md)
     return md.replace("**", "").replace("__", "").strip("_* ")
+
+
+def markdown_to_html(md: str) -> str:
+    """Tiny safe Markdown: escaped text, paragraphs, bullet lists, **bold**, headings."""
+    out, in_list = [], False
+    for line in (md or "").splitlines():
+        t = html.escape(line.strip())
+        t = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", t)
+        bullet = re.match(r"^[-*•]\s+(.*)$", t) or re.match(r"^\d+[.)]\s+(.*)$", t)
+        if bullet:
+            if not in_list:
+                out.append("<ul>")
+                in_list = True
+            out.append(f"<li>{bullet.group(1)}</li>")
+            continue
+        if in_list:
+            out.append("</ul>")
+            in_list = False
+        head = re.match(r"^#{1,4}\s+(.*)$", t)
+        if head:
+            out.append(f"<h4>{head.group(1)}</h4>")
+        elif t:
+            out.append(f"<p>{t}</p>")
+    if in_list:
+        out.append("</ul>")
+    return "".join(out)
+
+
+_PALETTE = ["#0f8b7d", "#7c5cd6", "#d9730d", "#2f6fdb", "#c2417a", "#4d8b2f", "#8a6d1f"]
+
+
+def report_to_html(report: MeetingReport, lang: str = "ru") -> str:
+    """Standalone, printable page (Print -> Save as PDF): recap, tasks with answers, full transcript."""
+    e = html.escape
+    r = report.recap
+    answers = {a.item_id: a for a in report.answers}
+    colors: dict[str, str] = {}
+    for seg in report.segments:
+        colors.setdefault(seg.speaker or "—", _PALETTE[len(colors) % len(_PALETTE)])
+    mine, heard = ordered_items(report)
+    parts = [f"<h1>{e(report.title)}</h1><p class='meta'>{e(str(report.created_at)[:16].replace('T', ' '))}"
+             f" · {len(report.segments)} реплик · участники: "
+             + ", ".join(f"<span class='who' style='--c:{c}'>{e(s)}</span>" for s, c in colors.items()) + "</p>"]
+    if r and r.summary:
+        parts.append(f"<section><h2>Итоги</h2><p>{e(r.summary)}</p>")
+        if r.decisions:
+            parts.append("<h3>Решения</h3><ul>" + "".join(f"<li>{e(d)}</li>" for d in r.decisions) + "</ul>")
+        if r.action_items:
+            parts.append("<h3>Поручения</h3><ul>" + "".join(
+                f"<li>{e(a.text)}" + (f" <span class='muted'>— {e(', '.join(x for x in (a.owner, a.due) if x))}</span>"
+                                      if a.owner or a.due else "") + "</li>" for a in r.action_items) + "</ul>")
+        for sec in r.sections or []:
+            if sec.bullets:
+                parts.append(f"<h3>{e(sec.title)}</h3><ul>" + "".join(f"<li>{e(b)}</li>" for b in sec.bullets) + "</ul>")
+        parts.append("</section>")
+    items = mine + heard
+    if items:
+        parts.append("<section><h2>Задачи и вопросы</h2>")
+        for it in items:
+            ans = answers.get(it.id)
+            body = markdown_to_html(ans.text) if ans and ans.text else ""
+            who = f"{e(it.speaker)} · " if it.speaker else ""
+            parts.append(f"<div class='card'><div class='q'>{e(it.text)}</div><div class='muted small'>{who}"
+                         f"{format_clock(it.start) if it.start is not None else ''}</div>"
+                         + (f"<div class='ans'>{body}</div>" if body else "") + "</div>")
+        parts.append("</section>")
+    parts.append("<section><h2>Расшифровка</h2><div class='tr'>")
+    for seg in report.segments:
+        spk = seg.speaker or "—"
+        parts.append(f"<div class='line'><span class='t'>{format_clock(seg.start) if seg.start is not None else ''}</span>"
+                     f"<span class='who' style='--c:{colors[spk]}'>{e(spk)}</span><span class='x'>{e(seg.text)}</span></div>")
+    parts.append("</div></section>")
+    css = """
+:root{--bg:#f6f7f9;--card:#fff;--ink:#15191f;--muted:#6b7380;--line:#e4e7ec}
+@media (prefers-color-scheme:dark){:root{--bg:#111418;--card:#1a1e24;--ink:#e8ebef;--muted:#9aa3ae;--line:#2a3038}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:860px;margin:0 auto;padding:40px 20px}h1{font-size:28px;margin:0 0 6px}h2{font-size:18px;margin:0 0 12px}
+h3{font-size:15px;margin:16px 0 6px}section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 22px;margin:18px 0}
+.meta,.muted{color:var(--muted)}.small{font-size:13px}.who{color:var(--c);font-weight:600}
+.card{border-left:3px solid #0f8b7d;padding:8px 14px;margin:12px 0}.q{font-weight:600}.ans{margin-top:6px}
+.line{display:grid;grid-template-columns:52px 150px 1fr;gap:10px;padding:5px 0;border-bottom:1px solid var(--line)}
+.t{color:var(--muted);font:12px/1.9 ui-monospace,Consolas,monospace}
+@media (max-width:600px){.line{grid-template-columns:44px 1fr}.line .x{grid-column:1/-1}}
+@media print{body{background:#fff;color:#000}section{break-inside:auto;border-color:#ccc}.card{break-inside:avoid}}
+"""
+    return (f"<!doctype html><html lang='{lang}'><head><meta charset='utf-8'><meta name='viewport' "
+            f"content='width=device-width,initial-scale=1'><title>{e(report.title)}</title><style>{css}</style></head>"
+            f"<body><main>{''.join(parts)}<p class='muted small'>Recapper · чтобы сохранить в PDF: Ctrl+P → «Сохранить как PDF»</p>"
+            f"</main></body></html>")

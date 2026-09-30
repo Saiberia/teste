@@ -120,3 +120,14 @@ def test_store_can_drop_segments(tmp_path):
     r = sample_report()
     store.save(r)
     assert store.get(r.id).segments == [] and r.segments  # original untouched
+
+
+def test_report_to_html_is_standalone_and_escaped():
+    from recapper.models import MeetingReport, Segment
+    from recapper.render import report_to_html
+
+    r = MeetingReport(title="Планёрка <x>", segments=[Segment(speaker="Артём", text="Цель: 100 <b>постов</b>", start=5),
+                                                     Segment(speaker="Я", text="Ок", start=9)])
+    page = report_to_html(r)
+    assert page.startswith("<!doctype html>") and "Планёрка &lt;x&gt;" in page
+    assert "&lt;b&gt;постов" in page and "Артём" in page and "00:05" in page and "@media print" in page
