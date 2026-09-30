@@ -379,6 +379,8 @@ def create_app(
                 path.write_bytes(data)
                 if diarize:
                     return transcriber.transcribe(path, diarize=True, context=context)
+                if source == "mic" and isinstance(transcriber, LLMTranscriber):
+                    return transcriber.transcribe(path, solo=True)
                 return transcriber.transcribe(path)
 
         try:

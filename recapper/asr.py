@@ -167,7 +167,7 @@ class LLMTranscriber:
     WINDOW = 60.0  # long recordings (uploaded files) are sent in pieces of this many seconds
 
     def transcribe(self, path: Path, diarize: bool = False,
-                   context: list[tuple[str, str]] | None = None) -> list[Segment]:
+                   context: list[tuple[str, str]] | None = None, solo: bool = False) -> list[Segment]:
         """``diarize``: label speakers («Собеседник 1», names); ``context``: recent (speaker, text) lines."""
         if not Path(path).is_file():
             raise ASRError(f"файл не найден: {path}")
@@ -177,32 +177,43 @@ class LLMTranscriber:
             raise ASRError(f"не удалось прочитать аудио: {exc}") from exc
         step = int(self.WINDOW * 16000)
         if len(audio) <= step * 1.5:
-            return self._piece(audio, diarize, context or [])
+            return self._piece(audio, diarize, context or [], solo)
         out: list[Segment] = []
         ctx = list(context or [])
         for i in range(0, len(audio), step):
             offset = i / 16000
-            for seg in self._piece(audio[i:i + step], diarize, ctx):
+            for seg in self._piece(audio[i:i + step], diarize, ctx, solo):
                 out.append(seg.model_copy(update={"start": round((seg.start or 0) + offset, 2),
                                                   "end": round((seg.end or 0) + offset, 2)}))
                 ctx.append((seg.speaker, seg.text))
         return out
 
-    def _piece(self, audio, diarize: bool, context: list[tuple[str, str]]) -> list[Segment]:
+    def _piece(self, audio, diarize: bool, context: list[tuple[str, str]], solo: bool = False) -> list[Segment]:
         import httpx
         import numpy as np
 
         duration = len(audio) / 16000
         # Silence or background noise: the model would only invent words ("Здравствуйте", "Абонент недоступен").
-        voiced = voiced_seconds(audio)
-        if duration < 0.3 or voiced < 0.5:
+        # My mic (auto-gain, one person): strict, noise-adaptive. Other participants: lenient, only true silence.
+        voiced = voiced_seconds(audio) if solo else voiced_seconds(audio, threshold=0.004, adaptive=False)
+        if solo:
+            regions = speech_regions(audio)
+            if regions is not None:  # a real voice detector beats the energy estimate
+                voiced = sum(e - b for b, e in regions) / 16000
+                if voiced >= 0.5:
+                    audio = np.concatenate([audio[b:e] for b, e in regions])  # send only the speech
+        if duration < 0.3 or voiced < (0.8 if solo else 0.3):
             return []
         wav = encode_wav(audio)
         errors = []
         for mode in list(self._modes):
             try:
                 if mode == "chat":
-                    text = self._chat(wav, self._diarize_prompt(context) if diarize else self._prompt())
+                    prompt = self._diarize_prompt(context) if diarize else self._prompt()
+                    if solo:
+                        prompt += ("\n\nЭто микрофон одного человека в наушниках. Пиши только то, что он отчётливо "
+                                   "произнёс сам. Шорохи, дыхание, клавиатура, далёкие голоса — не речь: для них верни пустой ответ.")
+                    text = self._chat(wav, prompt)
                 else:
                     text = self._transcriptions(wav)
             except httpx.HTTPError as exc:
@@ -216,7 +227,13 @@ class LLMTranscriber:
                 self._modes.remove(mode)
                 self._modes.insert(0, mode)
             text = _clean_transcript(text)
-            if not text or (voiced < 3.0 and _is_phantom(text)):
+            if text and (text.startswith(("(", "[")) or _TIMECODE.search(text)):
+                text = _strip_notes(text)
+            if not text or (voiced < 4.0 and _is_phantom(text, short_ok=not solo)):
+                return []
+            # More words than could be said in the time a voice was actually heard -> invented.
+            if solo and len(_words(text)) > voiced * 3.5 + 1:
+                log.info("mic: dropped %r (%.1f s of voice)", text, voiced)
                 return []
             if diarize and mode == "chat":
                 return _drop_repeats(_split_speakers(text, duration), context)
@@ -263,19 +280,31 @@ def _split_speakers(text: str, duration: float) -> list[Segment]:
     return out
 
 
-_PHANTOMS = ("здравствуйте", "добрый день", "доброе утро", "добрый вечер", "алло", "абонент временно недоступен",
+_PHANTOMS = ("привет", "всем привет", "пока", "ок", "окей", "хорошо", "понятно", "так", "ну", "м", "мм", "hello", "hi",
+             "okay", "thank you", "thanks", "bye", "здравствуйте", "добрый день", "доброе утро", "добрый вечер", "алло", "абонент временно недоступен",
              "абонент недоступен", "спасибо за просмотр", "спасибо за внимание", "продолжение следует",
-             "субтитры", "редактор субтитров", "подписывайтесь", "до свидания", "спасибо", "угу", "ага", "да", "нет")
+             "субтитры", "редактор субтитров", "пожалуйста подождите", "подождите", "одну минуту", "минуточку",
+             "вас не слышно", "меня слышно", "слышно", "вы меня слышите", "секунду", "подписывайтесь", "до свидания", "спасибо", "угу", "ага", "да", "нет")
 
 
-def _is_phantom(text: str) -> bool:
-    """Typical words a speech model invents on noise; only trusted when little speech was heard."""
+_REAL_SHORT = {"да", "нет", "угу", "ага", "ну", "так", "м", "мм", "ок", "окей", "хорошо", "понятно", "привет", "пока",
+               "спасибо", "алло", "секунду", "слышно"}
+
+
+def _is_phantom(text: str, short_ok: bool = False) -> bool:
+    """Typical words a speech model invents on noise; only trusted when little speech was heard.
+    ``short_ok``: other participants really do say «Да», «Угу», «Алло» — keep those."""
     norm = " ".join(_words(text))
-    return any(norm == p or norm.startswith(p + " ") and len(norm) <= len(p) + 12 for p in _PHANTOMS)
+    phantoms = [p for p in _PHANTOMS if not (short_ok and p in _REAL_SHORT)]
+    return any(norm == p or norm.startswith(p + " ") and len(norm) <= len(p) + 12 for p in phantoms)
 
 
-def voiced_seconds(audio, rate: int = 16000, frame: float = 0.03, threshold: float = 0.012) -> float:
-    """Seconds of 30 ms frames loud enough to be speech (a simple energy VAD)."""
+def voiced_seconds(audio, rate: int = 16000, frame: float = 0.03, threshold: float = 0.012,
+                   adaptive: bool = True) -> float:
+    """Seconds of 30 ms frames loud enough to be speech (energy VAD).
+
+    The threshold adapts to the noise floor (auto-gain lifts room noise, keyboard, breathing),
+    so only frames clearly above this microphone's background count."""
     import numpy as np
 
     n = int(rate * frame)
@@ -283,7 +312,35 @@ def voiced_seconds(audio, rate: int = 16000, frame: float = 0.03, threshold: flo
         return 0.0
     frames = audio[: len(audio) // n * n].reshape(-1, n)
     rms = np.sqrt(np.mean(frames ** 2, axis=1))
-    return float((rms > threshold).sum() * frame)
+    if not adaptive:
+        return float((rms > threshold).sum() * frame)
+    floor = float(np.percentile(rms, 20))
+    return float((rms > max(threshold, min(4.0 * floor, 0.05))).sum() * frame)
+
+
+def speech_regions(audio, rate: int = 16000):
+    """Silero VAD (bundled with faster-whisper): real speech vs typing, clicks, breathing.
+    Returns [(start_sample, end_sample)], or None when the model is not available."""
+    try:
+        from faster_whisper.vad import VadOptions, get_speech_timestamps
+    except Exception:
+        return None
+    try:
+        ts = get_speech_timestamps(audio, VadOptions(threshold=0.5, min_speech_duration_ms=250,
+                                                     min_silence_duration_ms=300, speech_pad_ms=200))
+    except Exception as exc:
+        log.warning("VAD failed: %s", exc)
+        return None
+    return [(int(t["start"]), int(t["end"])) for t in ts]
+
+
+_NOISE_NOTE = re.compile(r"[\(\[][^)\]]{0,80}[\)\]]")
+_TIMECODE = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?(?:\s*[-–—>]+\s*\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?)?\b")
+
+
+def _strip_notes(text: str) -> str:
+    """«(Звуки печати на клавиатуре)», «[музыка]», «00:10.871 - 00:11.831» are not speech."""
+    return re.sub(r"\s{2,}", " ", _TIMECODE.sub("", _NOISE_NOTE.sub("", text))).strip(" -–—,.")
 
 
 def _words(text: str) -> list[str]:

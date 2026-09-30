@@ -172,6 +172,14 @@ def test_fragment_of_previous_line_is_dropped():
     assert [s.text for s in _drop_repeats(new, ctx)] == ["Артём, не пускает."]
 
 
+@pytest.fixture(autouse=True)
+def _energy_vad(monkeypatch):
+    """Test tones are not human speech for Silero VAD: use the energy estimate in unit tests."""
+    import recapper.asr
+
+    monkeypatch.setattr(recapper.asr, "speech_regions", lambda audio, rate=16000: None)
+
+
 def test_noise_and_phantom_phrases_on_the_mic_are_dropped(tmp_path):
     from recapper.asr import is_echo, voiced_seconds
 
@@ -183,7 +191,7 @@ def test_noise_and_phantom_phrases_on_the_mic_are_dropped(tmp_path):
     with wave.open(str(path), "wb") as w:
         w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
         w.writeframes((quiet * 32767).astype("<i2").tobytes())
-    assert t.transcribe(path) == []
+    assert t.transcribe(path, solo=True) == []
     # a short burst of sound + a typical invented phrase -> dropped
     burst = write_wav(tmp_path / "b.wav", seconds=1.0)
     assert make(lambda r: chat_reply("Абонент временно недоступен.")).transcribe(burst) == []
@@ -192,3 +200,47 @@ def test_noise_and_phantom_phrases_on_the_mic_are_dropped(tmp_path):
     # the mic heard the speakers
     assert is_echo("вчера я работала с видеосервисами", ["Ну смотрите Артём, вчера я работала с видеосервисами. Единственное"])
     assert not is_echo("Ассистент, посчитай конверсию", ["вчера я работала с видеосервисами"])
+
+
+def test_mic_solo_mode_is_stricter(tmp_path):
+    from recapper.asr import voiced_seconds
+
+    rng = np.random.default_rng(1)
+    noise = rng.normal(0, 0.02, 16000 * 6).astype(np.float32)  # loud room noise after auto-gain
+    assert voiced_seconds(noise) < 0.5  # adaptive floor: steady noise is not speech
+    burst = write_wav(tmp_path / "b.wav", seconds=1.5)
+    prompts = []
+
+    def handler(r):
+        prompts.append(json.loads(r.content)["messages"][0]["content"][0]["text"])
+        return chat_reply("Привет.")
+
+    assert make(handler).transcribe(burst, solo=True) == []
+    assert "наушниках" in prompts[0]
+
+
+def test_mic_text_longer_than_heard_voice_is_dropped(tmp_path):
+    """0.9 s of voice cannot carry a 6-word sentence: the model invented it."""
+    t = np.arange(int(16000 * 6)) / 16000
+    audio = np.where(t < 0.9, np.sin(2 * np.pi * 200 * t) * 0.3, 0).astype(np.float32)
+    path = tmp_path / "m.wav"
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+        w.writeframes((audio * 32767).astype("<i2").tobytes())
+    assert make(lambda r: chat_reply("Ну давайте тогда обсудим вчерашние дела")).transcribe(path, solo=True) == []
+    assert make(lambda r: chat_reply("Пожалуйста, подождите.")).transcribe(path, solo=True) == []
+    assert [s.text for s in make(lambda r: chat_reply("Посчитай конверсию")).transcribe(path, solo=True)] == ["Посчитай конверсию"]
+
+
+def test_other_participants_are_not_over_filtered(tmp_path):
+    """Quiet call audio and short real answers from others must survive."""
+    quiet = write_wav(tmp_path / "q.wav", seconds=3.0, amp=0.02)  # a quiet but real voice in the call
+    assert [s.text for s in make(lambda r: chat_reply("Да.")).transcribe(quiet)] == ["Да."]
+    assert make(lambda r: chat_reply("Абонент временно недоступен")).transcribe(quiet) == []
+
+
+def test_notes_and_timecodes_are_not_speech():
+    from recapper.asr import _strip_notes
+
+    assert _strip_notes("(Звуки печати на клавиатуре)") == ""
+    assert _strip_notes("00:10.871 - 00:11.831 Здравствуйте.") == "Здравствуйте"
