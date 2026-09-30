@@ -155,7 +155,7 @@ class LLMTranscriber:
         for spk, _ in context:
             if spk and spk not in known:
                 known.append(spk)
-        ctx = "\n".join(f"{spk}: {text}" for spk, text in context[-8:])
+        ctx = "\n".join(f"{spk}: {text}" for spk, text in context[-8:] if text)
         return (self._prompt() + "\n\nВ записи могут говорить несколько человек. Каждую реплику пиши с новой строки "
                 "в формате «Подпись: текст». Если человек назвал себя или к нему обратились по имени — подписывай "
                 "его этим именем, иначе «Собеседник 1», «Собеседник 2» и т. д. Одному голосу — всегда одна подпись. Реплики владельца микрофона сюда не попадают — это только собеседники."

@@ -183,6 +183,7 @@ class LiveSession:
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="answer")
         self._futures: dict[str, Future] = {}
         self._events: list[Event] = []
+        self.participants = []  # names said to the assistant; hints for speaker labels
         self._pending: list[Segment] = []  # not yet shown to the suggestion detector
         self._retries = 0
 
@@ -217,13 +218,35 @@ class LiveSession:
             context = self.report.segments[max(0, start - CONTEXT_SEGMENTS):start]
             known = list(self.report.items)
         # Voice commands are recognised immediately, on every segment.
-        commands = self.c.commands.detect(segments, context, known)
+        commands = [c for c in self.c.commands.detect(segments, context, known) if not self._speaker_command(c.text)]
         added = self._add_items(commands)
         with self._lock:
             pending_chars = sum(len(s.text) for s in self._pending)
         if flush or pending_chars >= self.min_chars:
             added += self._detect()
         return added
+
+    participants: list[str]
+
+    def _speaker_command(self, text: str) -> bool:
+        """«Собеседник 1 — это Артём» renames; «на встрече Артём и Мария» sets participants. True if handled."""
+        import re
+
+        m = re.search(r"(собеседник\s*\d+)\s*(?:[—–-]\s*)?(?:это\s+)?([A-ZА-ЯЁ][\w-]+)", text, re.I)
+        if m:
+            old = next((sp for sp in {x.speaker for x in self.report.segments}
+                        if sp.lower().replace(" ", "") == m.group(1).lower().replace(" ", "")), None)
+            if old:
+                with self._lock:
+                    self.report.rename_speaker(old, m.group(2).capitalize())
+                return True
+        m = re.search(r"(?:на встрече|участники|участвуют)[:\s]+(.+)", text, re.I)
+        if m:
+            names = [n.strip(" .,").capitalize() for n in re.split(r",|\sи\s", m.group(1)) if n.strip(" .,")]
+            if names and all(len(n.split()) <= 2 for n in names):
+                self.participants = names
+                return True
+        return False
 
     def _add_items(self, items: list[Item]) -> list[Item]:
         # Adding and scheduling happen under one lock, so finish() can never seal the

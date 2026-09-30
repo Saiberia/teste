@@ -288,3 +288,20 @@ def test_stage_events_cancel_dismiss_retry_refine():
     assert report.answer_for(child.id) is not None
     with pytest.raises(ValueError):
         s.set_item_status(cmd.id, "weird")
+
+
+def test_voice_rename_and_participants():
+    from recapper.config import Settings
+    from recapper.engine import Runtime
+    from recapper.models import Segment
+
+    from recapper.store import ReportStore
+    rt = Runtime(Settings(llm_provider="none"), ReportStore(":memory:"))
+    sess = rt.session("t", "web")
+    sess.add_segments([Segment(speaker="Собеседник 1", text="Доброе утро", source="system")])
+    added = sess.add_segments([Segment(speaker="Я", text="Ассистент, собеседник 1 — это Артём.", source="mic"),
+                               Segment(speaker="Я", text="Ассистент, на встрече Артём и Мария.", source="mic")])
+    assert added == []
+    assert sess.report.segments[0].speaker == "Артём"
+    assert sess.participants == ["Артём", "Мария"]
+    sess.close()

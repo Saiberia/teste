@@ -359,6 +359,8 @@ def create_app(
 
         diarize = source == "system" and s.asr_ai_diarize and isinstance(transcriber, LLMTranscriber)
         context = [(x.speaker or "", x.text) for x in sess.report.segments[-12:] if x.speaker != s.me_label] if diarize else []
+        if diarize and sess.participants:
+            context = [(n, "") for n in sess.participants] + context
 
         def transcribe() -> list[Segment]:
             with tempfile.TemporaryDirectory() as tmp:  # audio is deleted right after recognition
