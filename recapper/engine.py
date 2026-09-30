@@ -183,7 +183,9 @@ class LiveSession:
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="answer")
         self._futures: dict[str, Future] = {}
         self._events: list[Event] = []
-        self.participants = []  # names said to the assistant; hints for speaker labels
+        self.participants = []  # names said to the assistant or read from the meeting page; hints for labels
+        self.speaker_events: list[tuple[float, str]] = []  # (unix time, who is speaking; "" = nobody) from the page
+        self.audio_anchor: float | None = None  # unix time of audio offset 0 (estimated from uploads)
         self._pending: list[Segment] = []  # not yet shown to the suggestion detector
         self._retries = 0
 
@@ -227,6 +229,41 @@ class LiveSession:
         return added
 
     participants: list[str]
+
+    def add_speaker_events(self, events: list[tuple[float, str]], participants: list[str]) -> None:
+        with self._lock:
+            self.speaker_events.extend(events)
+            self.speaker_events.sort(key=lambda e: e[0])
+            del self.speaker_events[:-5000]
+            for name in participants:
+                if name and name not in self.participants:
+                    self.participants.append(name)
+
+    def note_audio_clock(self, arrived: float, offset: float, duration: float) -> None:
+        """A chunk covering [offset, offset+duration] arrived at ``arrived``: estimate when offset 0 was.
+        The smallest estimate has the least upload delay in it."""
+        cand = arrived - offset - duration
+        with self._lock:
+            self.audio_anchor = cand if self.audio_anchor is None else min(self.audio_anchor, cand)
+
+    def speaker_at(self, start: float, end: float) -> str:
+        """Who spoke most in [start, end] (audio offsets) according to the meeting page; "" if unclear."""
+        with self._lock:
+            events = list(self.speaker_events)
+            anchor = self.audio_anchor
+        if not events or end <= start or anchor is None:
+            return ""
+        start, end = start + anchor, end + anchor
+        spans: dict[str, float] = {}
+        for i, (t, name) in enumerate(events):
+            t_end = events[i + 1][0] if i + 1 < len(events) else t + 15.0  # the last event holds for a while
+            lo, hi = max(t, start), min(t_end, end)
+            if name and hi > lo:
+                spans[name] = spans.get(name, 0.0) + hi - lo
+        if not spans:
+            return ""
+        name, span = max(spans.items(), key=lambda kv: kv[1])
+        return name if span >= 0.6 * (end - start) else ""
 
     def _speaker_command(self, text: str) -> bool:
         """«Собеседник 1 — это Артём» renames; «на встрече Артём и Мария» sets participants. True if handled."""

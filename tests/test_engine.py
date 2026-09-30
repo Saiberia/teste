@@ -305,3 +305,22 @@ def test_voice_rename_and_participants():
     assert sess.report.segments[0].speaker == "Артём"
     assert sess.participants == ["Артём", "Мария"]
     sess.close()
+
+
+def test_speaker_at_uses_page_events_on_the_audio_clock():
+    from recapper.config import Settings
+    from recapper.engine import Runtime
+    from recapper.store import ReportStore
+
+    sess = Runtime(Settings(llm_provider="none"), ReportStore(":memory:")).session("t", "web")
+    t0 = 1_700_000_000.0
+    assert sess.speaker_at(0, 5) == ""  # no clock yet
+    sess.note_audio_clock(arrived=t0 + 12.8, offset=0.0, duration=12.0)  # 0.8 s upload delay
+    sess.note_audio_clock(arrived=t0 + 24.3, offset=12.0, duration=12.0)  # smaller delay wins
+    assert abs(sess.audio_anchor - (t0 + 0.3)) < 1e-6
+    sess.add_speaker_events([(t0 + 0.3, "Артём"), (t0 + 6.3, "Мария"), (t0 + 9.3, "")], ["Артём", "Мария"])
+    assert sess.speaker_at(0, 5) == "Артём"
+    assert sess.speaker_at(6, 9) == "Мария"
+    assert sess.speaker_at(4, 8) == ""  # split between two people: stay with the AI's label
+    assert sess.participants == ["Артём", "Мария"]
+    sess.close()

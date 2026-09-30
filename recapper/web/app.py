@@ -106,6 +106,16 @@ class SpeakerRename(BaseModel):
     new: str = Field(min_length=1, max_length=100)
 
 
+class SpeakerEvent(BaseModel):
+    at: float = Field(gt=0)  # unix time in milliseconds (Date.now() in the browser)
+    name: str = Field("", max_length=60)
+
+
+class SpeakerEvents(BaseModel):
+    events: list[SpeakerEvent] = Field(default_factory=list, max_length=2000)
+    participants: list[str] = Field(default_factory=list, max_length=50)
+
+
 class AITest(BaseModel):
     """Unsaved form values; empty fields fall back to the saved settings."""
     base_url: str = ""
@@ -352,6 +362,7 @@ def create_app(
             raise HTTPException(422, "source: mic или system")
         transcriber = await run_in_threadpool(asr)
         data = await file.read(MAX_UPLOAD_BYTES + 1)
+        arrived = time.time()
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(413, "фрагмент слишком большой")
         s = settings_now()
@@ -374,11 +385,34 @@ def create_app(
             raw = await run_in_threadpool(transcribe)
         except ASRError as exc:
             raise HTTPException(422, str(exc)) from exc
+        if raw:
+            sess.note_audio_clock(arrived, max(offset, 0.0), max((x.end or 0.0) for x in raw))
+        if source == "system" and sess.speaker_events:  # real names from the meeting page (Google Meet captions)
+            raw = [seg.model_copy(update={"speaker": sess.speaker_at((seg.start or 0.0) + max(offset, 0.0),
+                                                                     (seg.end or 0.0) + max(offset, 0.0)) or seg.speaker})
+                   for seg in raw]
         segments = [Segment(speaker=seg.speaker or speaker, text=seg.text, source=source, start=(seg.start or 0.0) + max(offset, 0.0),
                             end=(seg.end + max(offset, 0.0)) if seg.end is not None else None) for seg in raw]
         items = await run_in_threadpool(sess.add_segments, segments) if segments else []
         return {"added": len(segments), "segments": [x.model_dump(mode="json") for x in segments],
                 "new_items": [i.model_dump(mode="json") for i in items]}
+
+    @app.post("/api/live/{sid}/speakers", dependencies=[Depends(auth)])
+    def live_speakers(sid: str, body: SpeakerEvents) -> dict:
+        """Who is speaking, read by the browser extension from the meeting page.
+        ``sid`` may be ``current``: the newest open session (recording started on the website)."""
+        if sid == "current":
+            _gc()
+            with live_lock:
+                open_ = [x for x in live.values() if x.state == "open"]
+            if not open_:
+                raise HTTPException(404, "нет активной встречи")
+            sess = max(open_, key=lambda x: str(x.report.created_at))
+        else:
+            sess = _session(sid)
+        sess.add_speaker_events([(e.at / 1000.0, e.name.strip()) for e in body.events],
+                                [p.strip()[:60] for p in body.participants if p.strip()])
+        return {"events": len(sess.speaker_events), "participants": sess.participants}
 
     @app.post("/api/live/{sid}/ask", dependencies=[Depends(auth)])
     def live_ask(sid: str, body: Question) -> dict:

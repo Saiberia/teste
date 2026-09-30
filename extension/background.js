@@ -116,3 +116,31 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }));
   return true;
 });
+
+// Google Meet speaker names (content/meet-speakers.js) -> the server's current live session.
+// Works for recordings started on the website too: the site cannot read another tab, the extension can.
+const speakerBuf = { events: [], participants: [], timer: null };
+
+async function flushSpeakers() {
+  speakerBuf.timer = null;
+  const body = { events: speakerBuf.events.splice(0), participants: speakerBuf.participants };
+  let cfg = {};
+  try { cfg = await chrome.storage.local.get(["serverUrl", "token"]); } catch { /* ignore */ }
+  if (!cfg.serverUrl || !cfg.token || !body.events.length) return;
+  try {
+    await fetch(`${cfg.serverUrl.replace(/\/+$/, "")}/api/live/current/speakers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.token}` },
+      body: JSON.stringify(body),
+    });
+  } catch { /* names are only a hint; recording works without them */ }
+}
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg?.type !== "meet-speaker") return false;
+  speakerBuf.events.push({ at: Number(msg.at) || Date.now(), name: String(msg.name || "").slice(0, 60) });
+  if (Array.isArray(msg.participants) && msg.participants.length) speakerBuf.participants = msg.participants.slice(0, 30);
+  if (speakerBuf.events.length > 500) speakerBuf.events.splice(0, speakerBuf.events.length - 500);
+  if (!speakerBuf.timer) speakerBuf.timer = setTimeout(flushSpeakers, 2000);
+  return false;
+});

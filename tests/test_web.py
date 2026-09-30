@@ -1716,3 +1716,12 @@ def test_ai_test_reports_unreachable_server(client):
 
 def test_ai_test_requires_auth(client):
     assert client.post("/api/ai/test", json={}, headers={"Authorization": "Bearer wrong"}).status_code == 401
+
+
+def test_speakers_go_to_the_current_session(client):
+    assert client.post("/api/live/current/speakers", json={"events": [{"at": 1, "name": "A"}]}).status_code == 404
+    sid = client.post("/api/live", json={"title": "Планёрка"}).json()["id"]
+    r = client.post("/api/live/current/speakers",
+                    json={"events": [{"at": 1_700_000_000_000, "name": "Артём"}], "participants": ["Артём", "Мария"]})
+    assert r.status_code == 200 and r.json()["participants"] == ["Артём", "Мария"]
+    assert client.post(f"/api/live/{sid}/speakers", json={"events": [{"at": -5, "name": "x"}]}).status_code == 422
