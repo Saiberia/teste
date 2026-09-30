@@ -874,7 +874,7 @@ def test_segments_validation(client):
     assert client.post(f"/api/live/{sid}/segments", json={"text": "x" * 100_001}).status_code == 422
     many = [{"text": f"реплика {i}"} for i in range(501)]
     assert client.post(f"/api/live/{sid}/segments", json={"segments": many}).status_code == 422
-    assert client.post(f"/api/live/{sid}/segments", json={"flush": True}).json() == {"added": 0, "new_items": []}
+    assert client.post(f"/api/live/{sid}/segments", json={"flush": True}).json() == {"added": 0, "new_items": [], "renames": []}
     r = client.post(f"/api/live/{sid}/segments", json={
         "segments": [{"speaker": "Аня", "text": VOICE, "start": 12.5}], "text": "Макс: А это из текста."})
     assert r.status_code == 200 and r.json()["added"] == 2
@@ -1158,7 +1158,7 @@ def test_live_audio_errors(make_client):
     r = upload(client, sid, "!asr-error")
     assert r.status_code == 422 and "распознать" in r.json()["detail"]
     silent = upload(client, sid, "   \n")
-    assert silent.status_code == 200 and silent.json() == {"added": 0, "segments": [], "new_items": []}
+    assert silent.status_code == 200 and silent.json() == {"added": 0, "segments": [], "new_items": [], "renames": []}
     assert client.post(f"/api/live/{sid}/audio").status_code == 422  # no file
     assert upload(client, "unknown", "Фраза.").status_code == 404
 
@@ -1725,3 +1725,12 @@ def test_speakers_go_to_the_current_session(client):
                     json={"events": [{"at": 1_700_000_000_000, "name": "Артём"}], "participants": ["Артём", "Мария"]})
     assert r.status_code == 200 and r.json()["participants"] == ["Артём", "Мария"]
     assert client.post(f"/api/live/{sid}/speakers", json={"events": [{"at": -5, "name": "x"}]}).status_code == 422
+
+
+def test_voice_rename_is_returned_to_the_live_ui(client):
+    sid = client.post("/api/live", json={"title": "t"}).json()["id"]
+    client.post(f"/api/live/{sid}/segments", json={"text": "Собеседник 1: Доброе утро"})
+    r = client.post(f"/api/live/{sid}/segments", json={"text": "Я: Ассистент, собеседник 1 — это Артём."}).json()
+    assert r["renames"] == [["Собеседник 1", "Артём"]] and r["new_items"] == []
+    html = client.post(f"/api/live/{sid}/finish")
+    assert html.status_code == 200

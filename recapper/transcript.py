@@ -66,7 +66,7 @@ def _split_speaker(text: str, known: set[str] | None = None) -> tuple[str, str]:
     match = _SPEAKER_RE.match(text)
     if match:
         name = match.group(1).strip()
-        if (known and name in known) or is_name_like(name) or re.fullmatch(r"(Speaker|Спикер|Участник) ?\d{1,2}", name):
+        if (known and name in known) or is_name_like(name) or re.fullmatch(r"(Speaker|Спикер|Участник|Собеседник) ?\d{1,2}", name):
             return name, match.group(2).strip()
     return "", text.strip()
 

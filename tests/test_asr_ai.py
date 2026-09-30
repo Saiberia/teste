@@ -243,4 +243,25 @@ def test_notes_and_timecodes_are_not_speech():
     from recapper.asr import _strip_notes
 
     assert _strip_notes("(Звуки печати на клавиатуре)") == ""
-    assert _strip_notes("00:10.871 - 00:11.831 Здравствуйте.") == "Здравствуйте"
+    assert _strip_notes("00:10.871 - 00:11.831 Здравствуйте.") == "Здравствуйте."
+
+
+@pytest.mark.parametrize("reply,expected", [
+    ("(Звуки печати на клавиатуре)", []),
+    ("какой-то странный звук.", []),
+    ("Звуки печати на клавиатуре", []),
+    ("[музыка]", []),
+    ("00:10.871 - 00:11.831 Давайте начнём", ["Давайте начнём"]),
+    ("Да (смеётся), конечно.", ["Да, конечно."]),
+    ("Шумный день был сегодня", ["Шумный день был сегодня"]),
+    ("Звук надо поправить в ролике", ["Звук надо поправить в ролике"]),
+])
+def test_sound_descriptions_are_removed_for_everyone(tmp_path, reply, expected):
+    path = write_wav(tmp_path / "a.wav", seconds=4.0)
+    assert [s.text for s in make(lambda r: chat_reply(reply)).transcribe(path)] == expected
+
+
+def test_sound_notes_removed_from_diarized_lines(tmp_path):
+    reply = "Собеседник 1: (кашель)\nСобеседник 2: Звуки клавиатуры\nСобеседник 2: Итак, начнём"
+    segs = make(lambda r: chat_reply(reply)).transcribe(write_wav(tmp_path / "a.wav", seconds=4), diarize=True)
+    assert [(s.speaker, s.text) for s in segs] == [("Собеседник 2", "Итак, начнём")]

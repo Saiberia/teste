@@ -145,7 +145,7 @@
     } catch (e) { /* ignore */ }
   }
   async function joinSession(id, title) {
-    Object.assign(S, { sid: id, last: 0, items: new Map(), answers: new Map(), pending: new Set(), segments: [], report: null });
+    Object.assign(S, { sid: id, last: 0, items: new Map(), answers: new Map(), pending: new Set(), segments: [], report: null, renamesApplied: 0 });
     S.title = title;
     clearInterval(S.timer); S.timer = setInterval(poll, 1200);
     await poll(); refreshLive();
@@ -289,7 +289,7 @@
     try {
       await cap.start({ sessionId: S.sid, token,
         onStatus: (m) => toast(m, "info"), onError: (e) => toast((e && e.message) || String(e), "err"),
-        onResult: (res) => { (res.segments || []).forEach(addFeed); if ((res.new_items || []).length) poll(); } });
+        onResult: (res) => { applyRenames(res.renames); (res.segments || []).forEach(addFeed); if ((res.new_items || []).length) poll(); } });
       S.recording = true;
     } catch (e) { toast(e.message, "err"); }
     refreshLive();
@@ -300,12 +300,29 @@
     try { await api(`/api/live/${S.sid}/finish`, { method: "POST" }); S.sessionState = "closing"; refreshLive(); }
     catch (e) { toast(e.message, "err"); }
   }
+  const feedLine = (seg) => el("div", { class: "line" }, el("span", { class: "muted small" }, fmtClock(seg.start) + " "),
+    el("b", {}, seg.speaker ? seg.speaker + ": " : ""), seg.text);
+  // Mic and call audio arrive separately: keep the feed in time order, not arrival order.
   function addFeed(seg) {
-    S.segments.push(seg);
+    let i = S.segments.length;
+    while (i > 0 && (S.segments[i - 1].start ?? 0) > (seg.start ?? 0)) i--;
+    S.segments.splice(i, 0, seg);
     const box = $("#feed"); if (!box) return;
     if (S.segments.length === 1) box.replaceChildren();
-    box.append(el("div", { class: "line" }, el("span", { class: "muted small" }, fmtClock(seg.start) + " "), el("b", {}, seg.speaker ? seg.speaker + ": " : ""), seg.text));
-    box.scrollTop = box.scrollHeight;
+    const atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+    const line = feedLine(seg);
+    const lines = box.querySelectorAll(".line");
+    if (i < lines.length) box.insertBefore(line, lines[i]); else box.append(line);
+    if (atEnd) box.scrollTop = box.scrollHeight;
+  }
+  // «Ассистент, собеседник 1 — это Артём»: relabel what is already on screen.
+  function applyRenames(renames) {
+    const seen = S.renamesApplied || 0;
+    if (!renames || renames.length <= seen) return;
+    for (const [from, to] of renames.slice(seen)) S.segments.forEach((x) => { if (x.speaker === from) x.speaker = to; });
+    S.renamesApplied = renames.length;
+    const box = $("#feed"); if (box && S.segments.length) box.replaceChildren(...S.segments.map(feedLine));
+    poll();
   }
   async function sendLine(flush) {
     const input = $("#line"); const text = input.value.trim();
@@ -313,6 +330,7 @@
     if (!text && !flush) return;
     try {
       const r = await api(`/api/live/${S.sid}/segments`, { json: { text, flush } });
+      applyRenames(r.renames);
       if (text) { addFeed({ speaker: (/^([^:]{1,40}):/.exec(text) || [])[1] || "", text: text.replace(/^[^:]{1,40}:\s*/, "") }); input.value = ""; }
       if (r.new_items.length) poll();
     } catch (e) { toast(e.message, "err"); }

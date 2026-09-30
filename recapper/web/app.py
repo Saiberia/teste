@@ -350,7 +350,7 @@ def create_app(
         if len(sess.report.segments) + len(segments) > MAX_SESSION_SEGMENTS:
             raise HTTPException(413, "слишком длинная сессия")
         items = sess.add_segments(segments, flush=body.flush)
-        return {"added": len(segments), "new_items": [i.model_dump(mode="json") for i in items]}
+        return {"added": len(segments), "new_items": [i.model_dump(mode="json") for i in items], "renames": sess.renames}
 
     @app.post("/api/live/{sid}/audio", dependencies=[Depends(auth)])
     async def live_audio(sid: str, file: UploadFile = File(...), source: str = Form("mic"),
@@ -400,7 +400,7 @@ def create_app(
                             end=(seg.end + max(offset, 0.0)) if seg.end is not None else None) for seg in raw]
         items = await run_in_threadpool(sess.add_segments, segments) if segments else []
         return {"added": len(segments), "segments": [x.model_dump(mode="json") for x in segments],
-                "new_items": [i.model_dump(mode="json") for i in items]}
+                "new_items": [i.model_dump(mode="json") for i in items], "renames": sess.renames}
 
     @app.post("/api/live/{sid}/speakers", dependencies=[Depends(auth)])
     def live_speakers(sid: str, body: SpeakerEvents) -> dict:

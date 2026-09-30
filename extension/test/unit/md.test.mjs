@@ -75,7 +75,7 @@ test("supported markdown: headings, emphasis, code, lists, quotes, tables, refs"
   assert.match(html, /<code>кодом<\/code>/);
   assert.match(html, /<ul>\n<li>пункт 1<\/li>\n<li>пункт 2<\/li>\n<\/ul>/);
   assert.match(html, /<ol>\n<li>шаг<\/li>\n<li>шаг<\/li>\n<\/ol>/);
-  assert.match(html, /<blockquote>цитата<\/blockquote>/);
+  assert.match(html, /<blockquote><p>цитата<\/p><\/blockquote>/);
   assert.match(html, /<table><tbody>\n<tr><th>Метрика<\/th><th>Значение<\/th><\/tr>\n<tr><td>CR<\/td><td>3%<\/td><\/tr>\n<\/tbody><\/table>/);
   assert.match(html, /<span class="ref">doc:pricing.md<\/span>/);
 });
@@ -94,4 +94,13 @@ test("safeHttpUrl only accepts http(s)", () => {
   assert.equal(safeHttpUrl("doc:pricing.md"), null);
   assert.equal(safeHttpUrl("transcript"), null);
   assert.equal(safeHttpUrl(""), null);
+});
+
+test("dividers, multi-line quotes and continued numbering", () => {
+  const html = renderMarkdown("текст\n\n---\n\n> **Тема:** X\n>\n> Добрый день!\n\n1. **А:**\n- x\n2. **Б:**\n---");
+  assert.match(html, /<hr>/);
+  assert.match(html, /<blockquote><p><strong>Тема:<\/strong> X<\/p><p>Добрый день!<\/p><\/blockquote>/);
+  assert.match(html, /<ol start="2">/);
+  assert.doesNotMatch(html, /<hr>$/);
+  assert.doesNotMatch(renderMarkdown("выбрать **пост (для оплаты"), /\*\*/);
 });

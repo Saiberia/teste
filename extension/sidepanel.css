@@ -193,3 +193,5 @@ input[type="text"], input[type="url"], input[type="password"], select {
   font-size: 13px; box-shadow: 0 2px 8px rgba(0, 0, 0, .2); overflow-wrap: anywhere;
 }
 .toast.err { background: var(--danger); color: #fff; }
+.md hr { border: 0; border-top: 1px solid var(--border); margin: 10px 0; }
+.md blockquote p { margin: 0 0 6px; } .md blockquote p:last-child { margin-bottom: 0; }

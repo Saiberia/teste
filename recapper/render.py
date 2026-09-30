@@ -253,29 +253,83 @@ def _plain(md: str) -> str:
     return md.replace("**", "").replace("__", "").strip("_* ")
 
 
+def _md_inline(t: str) -> str:
+    t = re.sub(r"`([^`]+)`", r"<code>\1</code>", t)
+    t = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", t)
+    t = re.sub(r"__([^_]+)__", r"<b>\1</b>", t)
+    t = re.sub(r"(^|[\s(])\*([^*\n]+)\*(?=[\s).,!?:;]|$)", r"\1<i>\2</i>", t)
+    return t.replace("**", "")
+
+
 def markdown_to_html(md: str) -> str:
-    """Tiny safe Markdown: escaped text, paragraphs, bullet lists, **bold**, headings."""
-    out, in_list = [], False
+    """Safe Markdown for the exported page: text is escaped first; lists (numbering kept),
+    **bold**, headings, --- dividers, multi-line > quotes and | tables |."""
+    out: list[str] = []
+    state = {"list": None, "table": False, "quote": None}
+
+    def close_list():
+        if state["list"]:
+            out.append(f"</{state['list']}>")
+            state["list"] = None
+
+    def close_table():
+        if state["table"]:
+            out.append("</table>")
+            state["table"] = False
+
+    def close_quote():
+        if state["quote"] is not None:
+            q = [x for x in state["quote"] if x]
+            if q:
+                out.append("<blockquote>" + "".join(f"<p>{_md_inline(x)}</p>" for x in q) + "</blockquote>")
+            state["quote"] = None
+
     for line in (md or "").splitlines():
-        t = html.escape(line.strip())
-        t = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", t)
-        bullet = re.match(r"^[-*•]\s+(.*)$", t) or re.match(r"^\d+[.)]\s+(.*)$", t)
-        if bullet:
-            if not in_list:
-                out.append("<ul>")
-                in_list = True
-            out.append(f"<li>{bullet.group(1)}</li>")
+        t = html.escape(line.strip(), quote=False)
+        if t.startswith("&gt;"):
+            close_list(); close_table()
+            state["quote"] = (state["quote"] or []) + [t[4:].strip()]
             continue
-        if in_list:
-            out.append("</ul>")
-            in_list = False
-        head = re.match(r"^#{1,4}\s+(.*)$", t)
+        close_quote()
+        if re.fullmatch(r"([-*_])(\s*\1){2,}", t):
+            close_list(); close_table()
+            if out and out[-1] != "<hr>":
+                out.append("<hr>")
+            continue
+        cells = re.fullmatch(r"\|(.+)\|", t)
+        if cells:
+            close_list()
+            parts = [c.strip() for c in cells.group(1).split("|")]
+            if all(re.fullmatch(r":?-{2,}:?", c) for c in parts):
+                continue
+            tag = "td" if state["table"] else "th"
+            if not state["table"]:
+                out.append("<table>")
+                state["table"] = True
+            out.append("<tr>" + "".join(f"<{tag}>{_md_inline(c)}</{tag}>" for c in parts) + "</tr>")
+            continue
+        close_table()
+        ul = re.match(r"^[-*•]\s+(.*)$", t)
+        ol = re.match(r"^(\d+)[.)]\s+(.*)$", t)
+        if ul or ol:
+            kind = "ul" if ul else "ol"
+            if state["list"] != kind:
+                close_list()
+                out.append("<ul>" if ul else ("<ol>" if ol.group(1) == "1" else f'<ol start="{ol.group(1)}">'))
+                state["list"] = kind
+            out.append(f"<li>{_md_inline(ul.group(1) if ul else ol.group(2))}</li>")
+            continue
+        close_list()
+        head = re.match(r"^#{1,6}\s+(.*)$", t)
         if head:
-            out.append(f"<h4>{head.group(1)}</h4>")
+            out.append(f"<h4>{_md_inline(head.group(1))}</h4>")
         elif t:
-            out.append(f"<p>{t}</p>")
-    if in_list:
-        out.append("</ul>")
+            out.append(f"<p>{_md_inline(t)}</p>")
+    close_quote(); close_list(); close_table()
+    while out and out[0] == "<hr>":
+        out.pop(0)
+    while out and out[-1] == "<hr>":
+        out.pop()
     return "".join(out)
 
 
@@ -311,7 +365,9 @@ def report_to_html(report: MeetingReport, lang: str = "ru") -> str:
         parts.append("<section><h2>Задачи и вопросы</h2>")
         for it in items:
             ans = answers.get(it.id)
-            body = markdown_to_html(ans.text) if ans and ans.text else ""
+            body = ""
+            if ans and (ans.summary or ans.body):
+                body = (f"<p><b>{_md_inline(e(ans.summary, quote=False))}</b></p>" if ans.summary else "") + markdown_to_html(ans.body)
             who = f"{e(it.speaker)} · " if it.speaker else ""
             parts.append(f"<div class='card'><div class='q'>{e(it.text)}</div><div class='muted small'>{who}"
                          f"{format_clock(it.start) if it.start is not None else ''}</div>"
@@ -330,7 +386,10 @@ def report_to_html(report: MeetingReport, lang: str = "ru") -> str:
 main{max-width:860px;margin:0 auto;padding:40px 20px}h1{font-size:28px;margin:0 0 6px}h2{font-size:18px;margin:0 0 12px}
 h3{font-size:15px;margin:16px 0 6px}section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 22px;margin:18px 0}
 .meta,.muted{color:var(--muted)}.small{font-size:13px}.who{color:var(--c);font-weight:600}
-.card{border-left:3px solid #0f8b7d;padding:8px 14px;margin:12px 0}.q{font-weight:600}.ans{margin-top:6px}
+.card{border-left:3px solid #0f8b7d;padding:8px 14px;margin:12px 0}
+table{border-collapse:collapse;width:100%;margin:8px 0;font-size:14px}th,td{border:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+blockquote{margin:8px 0;padding:8px 14px;border-left:3px solid var(--line);background:var(--bg);border-radius:8px}blockquote p{margin:0 0 6px}
+hr{border:0;border-top:1px solid var(--line);margin:12px 0}code{font-family:ui-monospace,Consolas,monospace;font-size:13px}.q{font-weight:600}.ans{margin-top:6px}
 .line{display:grid;grid-template-columns:52px 150px 1fr;gap:10px;padding:5px 0;border-bottom:1px solid var(--line)}
 .t{color:var(--muted);font:12px/1.9 ui-monospace,Consolas,monospace}
 @media (max-width:600px){.line{grid-template-columns:44px 1fr}.line .x{grid-column:1/-1}}

@@ -131,3 +131,19 @@ def test_report_to_html_is_standalone_and_escaped():
     page = report_to_html(r)
     assert page.startswith("<!doctype html>") and "Планёрка &lt;x&gt;" in page
     assert "&lt;b&gt;постов" in page and "Артём" in page and "00:05" in page and "@media print" in page
+
+
+def test_report_to_html_with_answers_recap_and_tables():
+    from recapper.models import ActionItem, Answer, Item, ItemKind, ItemOrigin, MeetingReport, Recap, Segment
+    from recapper.render import report_to_html
+
+    item = Item(kind=ItemKind.TASK, text="Выбрать пост", origin=ItemOrigin.VOICE, speaker="Я", start=12)
+    r = MeetingReport(title="Встреча", segments=[Segment(speaker="Я", text="Ассистент, выбери пост", start=12)],
+                      items=[item],
+                      answers=[Answer(item_id=item.id, summary="Нужно выбрать **пост** для оплаты",
+                                      body="| А | Б |\n|---|---|\n| 1 | 2 |\n\n---\n\n> письмо\n>\n> текст")],
+                      recap=Recap(summary="Итог", decisions=["Решили"], action_items=[ActionItem(text="Оплатить", owner="Артём")]))
+    page = report_to_html(r)
+    assert "<b>Нужно выбрать <b>пост</b> для оплаты</b>" in page and "**" not in page
+    assert "<table><tr><th>А</th>" in page and "<blockquote><p>письмо</p><p>текст</p></blockquote>" in page
+    assert "Решили" in page and "Артём" in page and "Выбрать пост" in page

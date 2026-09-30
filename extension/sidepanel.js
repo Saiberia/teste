@@ -621,7 +621,11 @@ function renderAnswer(a, id) {
     chip(t(statusKey), `st-${a.status}`),
     a.confidence ? h("span", { class: "muted" }, `${t("confidence")}: ${["high", "medium", "low"].includes(a.confidence) ? t(`conf_${a.confidence}`) : a.confidence}`) : null,
     copy));
-  if (a.summary) box.append(h("p", { class: "summary" }, a.summary));
+  if (a.summary) {
+    const sum = h("div", { class: "summary md" });
+    sum.innerHTML = renderMarkdown(a.summary); // escaped; see lib/md.js
+    box.append(sum);
+  }
   if (a.body) {
     const body = h("div", { class: "md" });
     body.innerHTML = renderMarkdown(a.body); // escaped; see lib/md.js

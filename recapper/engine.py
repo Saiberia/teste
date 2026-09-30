@@ -183,6 +183,7 @@ class LiveSession:
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="answer")
         self._futures: dict[str, Future] = {}
         self._events: list[Event] = []
+        self.renames: list[tuple[str, str]] = []  # voice renames, so the live UI can relabel its feed
         self.participants = []  # names said to the assistant or read from the meeting page; hints for labels
         self.speaker_events: list[tuple[float, str]] = []  # (unix time, who is speaking; "" = nobody) from the page
         self.audio_anchor: float | None = None  # unix time of audio offset 0 (estimated from uploads)
@@ -274,8 +275,10 @@ class LiveSession:
             old = next((sp for sp in {x.speaker for x in self.report.segments}
                         if sp.lower().replace(" ", "") == m.group(1).lower().replace(" ", "")), None)
             if old:
+                new = m.group(2).capitalize()
                 with self._lock:
-                    self.report.rename_speaker(old, m.group(2).capitalize())
+                    self.report.rename_speaker(old, new)
+                    self.renames.append((old, new))
                 return True
         m = re.search(r"(?:на встрече|участники|участвуют)[:\s]+(.+)", text, re.I)
         if m:

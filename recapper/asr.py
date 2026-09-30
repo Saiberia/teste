@@ -121,7 +121,8 @@ class LLMTranscriber:
         return ("Сделай дословную расшифровку этой аудиозаписи" + where + ". Верни ТОЛЬКО произнесённый текст, "
                 "с пунктуацией, без пояснений, заголовков, таймкодов и кавычек. Ничего не придумывай и не дополняй. "
                 "Если речи нет или она неразборчива, верни пустой ответ. Не пиши приветствий, фраз автоответчика "
-                "или субтитров, которых нет в записи.")
+                "или субтитров, которых нет в записи. Только произнесённые слова: НЕ описывай звуки, шум, "
+                "клавиатуру, музыку, смех и паузы — ни в скобках, ни словами.")
 
     def _chat(self, wav: bytes, prompt: str) -> str:
         import base64
@@ -227,9 +228,9 @@ class LLMTranscriber:
                 self._modes.remove(mode)
                 self._modes.insert(0, mode)
             text = _clean_transcript(text)
-            if text and (text.startswith(("(", "[")) or _TIMECODE.search(text)):
+            if text and (_NOISE_NOTE.search(text) or _TIMECODE.search(text)):
                 text = _strip_notes(text)
-            if not text or (voiced < 4.0 and _is_phantom(text, short_ok=not solo)):
+            if not text or _is_sound_note(text) or (voiced < 4.0 and _is_phantom(text, short_ok=not solo)):
                 return []
             # More words than could be said in the time a voice was actually heard -> invented.
             if solo and len(_words(text)) > voiced * 3.5 + 1:
@@ -270,7 +271,7 @@ def _split_speakers(text: str, duration: float) -> list[Segment]:
             turns[-1][1] += " " + line
         else:
             turns.append(["", line])
-    turns = [t for t in turns if _clean_transcript(t[1])]
+    turns = [t for t in turns if _clean_transcript(t[1]) and not _is_sound_note(t[1])]
     total = sum(len(t[1]) for t in turns) or 1
     out, pos = [], 0.0
     for spk, words in turns:
@@ -284,11 +285,23 @@ _PHANTOMS = ("привет", "всем привет", "пока", "ок", "ок�
              "okay", "thank you", "thanks", "bye", "здравствуйте", "добрый день", "доброе утро", "добрый вечер", "алло", "абонент временно недоступен",
              "абонент недоступен", "спасибо за просмотр", "спасибо за внимание", "продолжение следует",
              "субтитры", "редактор субтитров", "пожалуйста подождите", "подождите", "одну минуту", "минуточку",
-             "вас не слышно", "меня слышно", "слышно", "вы меня слышите", "секунду", "подписывайтесь", "до свидания", "спасибо", "угу", "ага", "да", "нет")
+             "вас не слышно", "меня слышно", "слышно", "вы меня слышите", "секунду", "проверка", "раз два три", "подписывайтесь", "до свидания", "спасибо", "угу", "ага", "да", "нет")
 
 
 _REAL_SHORT = {"да", "нет", "угу", "ага", "ну", "так", "м", "мм", "ок", "окей", "хорошо", "понятно", "привет", "пока",
                "спасибо", "алло", "секунду", "слышно"}
+
+
+_SOUND_WORDS = re.compile(
+    r"^(какой[- ]?то\s+|какие[- ]?то\s+)?(странн\w+\s+|громк\w+\s+|тих\w+\s+|фонов\w+\s+)?"
+    r"(звук|звуки|звука|шум|шумы|стук|щелчок|щелчки|шорох|шорохи|кашель|смех|музыка|тишина|пауза|"
+    r"неразборчиво|клавиатура|клавиатуры)(\s+(печати\s+)?(на\s+)?(клавиатур\w*|мыши|стола|телефона))?$", re.I)
+
+
+def _is_sound_note(text: str) -> bool:
+    """«какой-то странный звук», «Звуки клавиатуры»: a description, not speech."""
+    t = text.strip(" .!…").lower()
+    return len(t.split()) <= 6 and bool(_SOUND_WORDS.match(t))
 
 
 def _is_phantom(text: str, short_ok: bool = False) -> bool:
@@ -339,8 +352,17 @@ _TIMECODE = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?(?:\s*[-–�
 
 
 def _strip_notes(text: str) -> str:
-    """«(Звуки печати на клавиатуре)», «[музыка]», «00:10.871 - 00:11.831» are not speech."""
-    return re.sub(r"\s{2,}", " ", _TIMECODE.sub("", _NOISE_NOTE.sub("", text))).strip(" -–—,.")
+    """«(Звуки печати на клавиатуре)», «[музыка]», «00:10.871 - 00:11.831» are not speech.
+    Works line by line so «Собеседник 1:» labels survive."""
+    lines = []
+    for line in text.splitlines():
+        line = re.sub(r"\s{2,}", " ", _TIMECODE.sub("", _NOISE_NOTE.sub("", line)))
+        line = re.sub(r"\s+([,.!?;:])", r"\1", line).strip(" -–—")
+        if re.fullmatch(r"[^:]{1,40}:\s*[.,]?", line):  # a label left without words
+            continue
+        if line.strip(" .,"):
+            lines.append(line)
+    return "\n".join(lines).strip()
 
 
 def _words(text: str) -> list[str]:
