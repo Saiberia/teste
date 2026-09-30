@@ -36,7 +36,7 @@ class FasterWhisperTranscriber:
         if not Path(path).is_file():
             raise ASRError(f"файл не найден: {path}")
         try:
-            segments, _info = self._model.transcribe(str(path), language=self.language, vad_filter=True)
+            segments, _info = self._model.transcribe(decode_audio(path), language=self.language, vad_filter=True)
             return [
                 Segment(text=s.text.strip(), start=float(s.start), end=float(s.end))
                 for s in segments
@@ -44,6 +44,29 @@ class FasterWhisperTranscriber:
             ]
         except Exception as exc:  # decoder errors, corrupt files
             raise ASRError(f"не удалось распознать аудио: {exc}") from exc
+
+
+def decode_audio(path: Path | str, sampling_rate: int = 16000):
+    """File -> mono float32 at 16 kHz, like faster_whisper.decode_audio.
+
+    Our own copy: faster-whisper passes ``metadata_errors=`` to ``av.open``, which
+    newer PyAV releases no longer accept ("unexpected keyword argument").
+    """
+    import av
+    import numpy as np
+
+    resampler = av.AudioResampler(format="s16", layout="mono", rate=sampling_rate)
+    chunks = []
+    with av.open(str(path), mode="r") as container:
+        stream = container.streams.audio[0]
+        for frame in container.decode(stream):
+            for out in resampler.resample(frame):
+                chunks.append(out.to_ndarray().reshape(-1))
+        for out in resampler.resample(None):  # flush
+            chunks.append(out.to_ndarray().reshape(-1))
+    if not chunks:
+        return np.zeros(0, dtype=np.float32)
+    return np.concatenate(chunks).astype(np.float32) / 32768.0
 
 
 def get_transcriber(settings: Settings) -> Transcriber | None:

@@ -29,6 +29,9 @@ def fake_whisper(monkeypatch):
     module = types.ModuleType("faster_whisper")
     module.WhisperModel = _FakeWhisperModel
     monkeypatch.setitem(sys.modules, "faster_whisper", module)
+    import recapper.asr
+
+    monkeypatch.setattr(recapper.asr, "decode_audio", str)  # the fake model gets the path back
     return module
 
 
@@ -114,3 +117,26 @@ def test_module_entrypoint_runs():
                          env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(root)})
     assert res.returncode == 0, res.stderr
     assert "## Мои задачи ассистенту (2)" in res.stdout and "## Прозвучало на встрече" in res.stdout
+
+
+def test_decode_audio_without_faster_whisper_decoder(tmp_path):
+    """Our decoder never passes metadata_errors= (removed in newer PyAV)."""
+    av = pytest.importorskip("av")
+    np = pytest.importorskip("numpy")
+    from recapper.asr import decode_audio
+
+    path = tmp_path / "tone.webm"
+    out = av.open(str(path), "w", format="webm")
+    st = out.add_stream("libopus", rate=48000)
+    st.layout = "stereo"
+    x = (np.sin(2 * np.pi * 440 * np.arange(48000) / 48000) * 16000).astype(np.int16)
+    for i in range(0, len(x), 960):
+        fr = av.AudioFrame.from_ndarray(np.vstack([x[i:i + 960]] * 2).reshape(1, -1), format="s16", layout="stereo")
+        fr.sample_rate = 48000
+        for p in st.encode(fr):
+            out.mux(p)
+    for p in st.encode(None):
+        out.mux(p)
+    out.close()
+    audio = decode_audio(path)
+    assert audio.dtype == np.float32 and abs(len(audio) - 16000) < 400 and 0.3 < abs(audio).max() < 0.6

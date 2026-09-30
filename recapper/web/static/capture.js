@@ -500,6 +500,7 @@
         audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
         systemAudio: 'include',
         selfBrowserSurface: 'exclude',
+        surfaceSwitching: 'include',
       });
     }
     stream.getVideoTracks().forEach(function (t) { t.stop(); stream.removeTrack(t); });
@@ -515,7 +516,12 @@
       return ' Разрешите Recapper «Запись экрана и системного звука» в Системных настройках → Конфиденциальность и безопасность и перезапустите приложение.';
     }
     if (bridge) return '';
-    return ' В окне выбора укажите вкладку со звонком и включите «Поделиться звуком вкладки».';
+    var win = /Windows/i.test((navigator.userAgentData && navigator.userAgentData.platform) || navigator.userAgent || '');
+    return win
+      ? ' Звонок в браузере: в окне выбора откройте «Вкладка Chrome», выберите вкладку со звонком и включите «Также поделиться звуком вкладки».'
+        + ' Звонок в программе (Zoom, Telegram, Teams): выберите «Весь экран» и включите «Также поделиться системным звуком». Вариант «Окно» звук не передаёт.'
+      : ' В окне выбора откройте «Вкладка Chrome», выберите вкладку со звонком и включите «Поделиться звуком вкладки». Вариант «Окно» звук не передаёт;'
+        + ' для звонка в отдельной программе откройте его в браузере или используйте приложение Recapper.';
   }
 
   /** One source: stream → AudioContext → worklet/ScriptProcessor → Chunker → WAV → Uploader. */
