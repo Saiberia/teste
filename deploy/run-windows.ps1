@@ -18,24 +18,37 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
   $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
 }
 
-# 2. Recapper + local speech recognition (first run takes a few minutes)
+# 2. Stop a Recapper that is still running (its files are locked, so the update would fail)
+$ToolDir = Join-Path $env:APPDATA "uv\tools\recapper"
+$Running = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+  $_.ProcessName -eq "recapper" -or ($_.Path -and $_.Path.StartsWith($ToolDir, [StringComparison]::OrdinalIgnoreCase))
+}
+if ($Running) {
+  Write-Host "Stopping the running Recapper..." -ForegroundColor Cyan
+  $Running | Stop-Process -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Seconds 2
+}
+
+# 3. Recapper + local speech recognition (first run takes a few minutes)
 Write-Host "Installing / updating Recapper..." -ForegroundColor Cyan
 uv tool install --force --python 3.12 --reinstall-package recapper "recapper[asr] @ $Zip"
-if ($LASTEXITCODE -ne 0) { throw "Recapper install failed" }
+if ($LASTEXITCODE -ne 0) {
+  throw "Recapper install failed. Close every Recapper window and run the command again."
+}
 
-# 3. Permanent access token (the extension and the site use it)
+# 4. Permanent access token (the extension and the site use it)
 $TokFile = Join-Path $AppDir "token.txt"
 if (-not (Test-Path $TokFile)) { [guid]::NewGuid().ToString("N") | Set-Content -NoNewline $TokFile }
 $Token = (Get-Content $TokFile -Raw).Trim()
 
-# 4. Desktop shortcut that re-runs this script
+# 5. Desktop shortcut that re-runs this script
 try {
   Invoke-WebRequest $Raw -OutFile (Join-Path $AppDir "run.ps1") -UseBasicParsing
   $Cmd = "@echo off`r`npowershell -ExecutionPolicy Bypass -NoProfile -File `"%LOCALAPPDATA%\Recapper\run.ps1`"`r`n"
   Set-Content -Path (Join-Path ([Environment]::GetFolderPath("Desktop")) "Recapper.cmd") -Value $Cmd -Encoding ASCII
 } catch { Write-Host "Shortcut not created: $_" -ForegroundColor Yellow }
 
-# 5. Defaults for a local OpenAI-compatible proxy (Gemini proxy on port 8045).
+# 6. Defaults for a local OpenAI-compatible proxy (Gemini proxy on port 8045).
 #    Everything can be changed later in Settings; saved settings win over these.
 if (-not $env:RECAPPER_LLM)          { $env:RECAPPER_LLM = "openai" }
 if (-not $env:OPENAI_BASE_URL)       { $env:OPENAI_BASE_URL = "http://127.0.0.1:8045/v1" }
@@ -43,7 +56,7 @@ if (-not $env:RECAPPER_OPENAI_MODEL) { $env:RECAPPER_OPENAI_MODEL = "gemini-2.5-
 # Speech recognition on the CPU: the GPU path needs CUDA 12 + cuDNN 9 DLLs that most PCs don't have.
 if (-not $env:RECAPPER_WHISPER_DEVICE) { $env:RECAPPER_WHISPER_DEVICE = "cpu" }
 
-# 6. Start the server, open the browser when it answers
+# 7. Start the server, open the browser when it answers
 $Url = "http://127.0.0.1:$Port"
 $Exe = Join-Path $env:USERPROFILE ".local\bin\recapper.exe"
 if (-not (Test-Path $Exe)) { $Exe = "recapper" }
